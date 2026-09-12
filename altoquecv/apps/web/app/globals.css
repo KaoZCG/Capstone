@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-surface: #f9f9f7;
+    --color-surface-dim: #dadad8;
+    --color-surface-bright: #f9f9f7;
+    --color-surface-container-lowest: #ffffff;
+    --color-surface-container-low: #f4f4f2;
+    --color-surface-container: #eeeeec;
+    --color-surface-container-high: #e8e8e6;
+    --color-surface-container-highest: #e2e3e1;
+    --color-on-surface: #1a1c1b;
+    --color-on-surface-variant: #59413c;
+    --color-primary: #ab2e15;
+    --color-on-primary: #ffffff;
+    --color-primary-container: #cd462b;
+    --color-on-primary-container: #fffbff;
+    --color-secondary: #5c5e66;
+    --color-on-secondary: #ffffff;
+    --color-secondary-container: #e0e2ec;
+    --color-on-secondary-container: #62646d;
+    --color-success: #026951;
+    --color-on-success: #ffffff;
+    --color-success-container: #2d8269;
+    --color-on-success-container: #f5fff8;
+    --color-error: #ba1a1a;
+    --color-on-error: #ffffff;
+    --color-error-container: #ffdad6;
+    --color-on-error-container: #93000a;
+    --color-outline: #8d716b;
+    --color-outline-variant: #e1bfb8;
+    --color-border: #e5e5e5;
+    --color-background: #f9f9f7;
+    --color-on-background: #1a1c1b;
+
+    --radius-input: 0.25rem;
+    --radius-button: 0.25rem;
+    --radius-card: 0.5rem;
+    --radius-container: 0.75rem;
+    --radius-pill: 9999px;
+  }
+
+  .dark {
+    --color-surface: #1c1f26;
+    --color-surface-dim: #10131a;
+    --color-surface-bright: #363941;
+    --color-surface-container-lowest: #0b0e15;
+    --color-surface-container-low: #25282f;
+    --color-surface-container: #2e323a;
+    --color-surface-container-high: #393d46;
+    --color-surface-container-highest: #32353c;
+    --color-on-surface: #f9f9f7;
+    --color-on-surface-variant: #a1a1a1;
+    --color-primary: #ffb4a4;
+    --color-on-primary: #640d00;
+    --color-primary-container: #f36143;
+    --color-on-primary-container: #580a00;
+    --color-secondary: #84d6b9;
+    --color-on-secondary: #00382a;
+    --color-secondary-container: #026951;
+    --color-on-secondary-container: #92e5c7;
+    --color-success: #84d6b9;
+    --color-on-success: #00382a;
+    --color-success-container: #026951;
+    --color-on-success-container: #92e5c7;
+    --color-error: #ffb4ab;
+    --color-on-error: #690005;
+    --color-error-container: #93000a;
+    --color-on-error-container: #ffdad6;
+    --color-outline: #393d46;
+    --color-outline-variant: #59413c;
+    --color-border: #393d46;
+    --color-background: #10131a;
+    --color-on-background: #e0e2ec;
+
+    --radius-input: 0.25rem;
+    --radius-button: 0.25rem;
+    --radius-card: 0.5rem;
+    --radius-container: 1rem;
+    --radius-pill: 9999px;
+  }
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-on-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

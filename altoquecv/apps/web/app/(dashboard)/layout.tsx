@@ -1,16 +1,17 @@
-import { Sidebar } from "@/components/layout/Sidebar";
-import { Topbar } from "@/components/layout/Topbar";
+import { Sidebar } from '@/components/layout/Sidebar';
+import { Topbar } from '@/components/layout/Topbar';
+import { ProtectedRoute } from '@/components/auth/protected-route';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background">
-      <Sidebar />
-      <div className="pl-64 flex flex-col min-h-screen">
-        <Topbar />
-        <main className="flex-1 max-w-[1200px] w-full mx-auto p-10">
-          {children}
-        </main>
+    <ProtectedRoute>
+      <div className="flex h-screen bg-surface">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Topbar />  {/* ← AQUÍ debe estar */}
+          <main className="flex-1 overflow-auto p-8">{children}</main>
+        </div>
       </div>
-    </div>
+    </ProtectedRoute>
   );
 }

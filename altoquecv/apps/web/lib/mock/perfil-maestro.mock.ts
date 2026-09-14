@@ -44,6 +44,25 @@ export const mockProfile: UserProfile = {
       stackTags: ["Vue.js", "TypeScript", "Tailwind CSS"],
     },
   ],
+  skills: [
+    "React",
+    "Next.js",
+    "TypeScript",
+    "Node.js",
+    "AWS",
+    "PostgreSQL",
+    "Docker",
+    "CI/CD",
+    "Tailwind CSS",
+    "REST APIs",
+    "GraphQL",
+    "Git",
+  ],
+  salaryExpectations: {
+    min: 3500000,
+    max: 5500000,
+    currency: "CLP",
+  },
   iaPreferences: [
     {
       id: "gpt-4-turbo",

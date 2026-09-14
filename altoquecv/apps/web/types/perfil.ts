@@ -40,5 +40,11 @@ export interface UserProfile {
   personalData: PersonalData;
   education: Education[];
   experience: Experience[];
+  skills: string[];                       
+  salaryExpectations?: {                   
+    min: number;
+    max: number;
+    currency: string;
+  };
   iaPreferences: IAPreference[];
 }

@@ -12,7 +12,7 @@ out/
 build
 dist
 
-# Archivos de entorno (¡Nunca subir contraseñas o keys!)
+# Archivos de entorno 
 .env
 .env*.local
 .env.development.local
@@ -30,7 +30,7 @@ pnpm-debug.log*
 *.pem
 Thumbs.db
 
-# Configuración de editores (VS Code, etc.)
+# Configuración de editores 
 .vscode/
 .idea/
 *.suo

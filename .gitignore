@@ -1,0 +1,55 @@
+# Dependencias
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+
+# Next.js / Compilación
+.next/
+out/
+build
+dist
+
+# Archivos de entorno (¡Nunca subir contraseñas o keys!)
+.env
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archivos del sistema operativo
+.DS_Store
+*.pem
+Thumbs.db
+
+# Configuración de editores (VS Code, etc.)
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Archivos de Vercel
+.vercel
+
+# Documentación externa del proyecto
+altoquecv/docs_extra_text/
+
+# Entornos y caches de Python
+**/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Artefactos locales de Docker
+.docker/

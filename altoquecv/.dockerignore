@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+.next
+**/.next
+backend/.venv
+backend/.pytest_cache
+backend/.env
+.git
+.gitignore
+*.log

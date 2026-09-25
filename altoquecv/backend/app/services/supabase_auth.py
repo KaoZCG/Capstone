@@ -169,20 +169,38 @@ class SupabaseAuthService:
                 "password": payload.password.get_secret_value(),
             },
         )
-        auth_response = self._parse_response(response, registration=False)
-        if auth_response.user_id and self._admin_headers:
-            try:
-                await self._sync_login_user(auth_response)
-                profile = await self.profile(auth_response.user_id)
-                auth_response.first_name = profile.first_name
-                auth_response.last_name = profile.last_name
-                auth_response.rut = profile.rut
-                auth_response.telefono = profile.phone
-            except AuthServiceError:
-                # Una cuenta Auth antigua puede no tener todavía filas públicas.
-                # El login sigue siendo válido y el frontend mostrará metadata de Auth.
-                pass
+        try:
+            auth_response = self._parse_response(response, registration=False)
+        except AuthServiceError as error:
+            if "confirm" in str(error).lower() or "verif" in str(error).lower():
+                raise AuthServiceError("Correo no verificado", status_code=403) from error
+            raise AuthServiceError("Correo o contraseña incorrectos", status_code=401) from error
+
+        if not auth_response.access_token or not auth_response.user_id:
+            raise AuthServiceError("Correo o contraseña incorrectos", status_code=401)
+
+        self._require_admin_headers()
+        await self._sync_login_user(auth_response)
+        await self._ensure_active_account(auth_response.user_id)
+        try:
+            profile = await self.profile(auth_response.user_id)
+            auth_response.first_name = profile.first_name
+            auth_response.last_name = profile.last_name
+            auth_response.rut = profile.rut
+            auth_response.telefono = profile.phone
+        except AuthServiceError:
+            # El perfil extendido es opcional para completar la respuesta de login.
+            pass
         return auth_response
+
+    async def _ensure_active_account(self, user_id: str) -> None:
+        """Exige que exista una cuenta pública activa además del usuario Auth."""
+        rows = await self._rest_get(
+            "usuarios",
+            {"select": "estado_cuenta", "id": f"eq.{user_id}"},
+        )
+        if not rows or rows[0].get("estado_cuenta") != "activo":
+            raise AuthServiceError("La cuenta no está activa", status_code=403)
 
     async def _sync_login_user(self, auth_response: AuthResponse) -> None:
         """Crea filas públicas para cuentas Auth antiguas que aún no las tienen."""

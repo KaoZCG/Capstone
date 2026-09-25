@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 # Importamos la misma instancia que utiliza Uvicorn para probar rutas reales.
 from app.main import app
+from app.api import get_auth_service
+from app.services.supabase_auth import AuthServiceError
 from pydantic import ValidationError
 
 from app.schemas.auth import PasswordConfirmationRequest
@@ -66,6 +68,38 @@ def test_current_user_requires_bearer_token() -> None:
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Token requerido"}
+
+
+def test_login_returns_401_for_invalid_credentials() -> None:
+    """Normaliza un fallo del proveedor al contrato de la HU de login."""
+    class InvalidCredentialsService:
+        async def login(self, payload: object) -> None:
+            raise AuthServiceError("invalid login", status_code=401)
+
+    async def override_auth_service():
+        yield InvalidCredentialsService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "persona@example.com", "password": "Wrong123"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Correo o contraseña incorrectos"}
+
+
+def test_login_rejects_empty_fields() -> None:
+    """No permite enviar al servicio un correo o contraseña vacíos."""
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "", "password": ""},
+    )
+
+    assert response.status_code == 422
 
 
 def test_login_rejects_sql_injection_like_email() -> None:

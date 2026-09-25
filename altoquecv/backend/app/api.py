@@ -81,6 +81,11 @@ async def login(
     try:
         return await service.login(payload)
     except AuthServiceError as error:
+        if error.status_code == 401:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Correo o contraseña incorrectos",
+            ) from error
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 

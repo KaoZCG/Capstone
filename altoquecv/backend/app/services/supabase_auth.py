@@ -45,6 +45,51 @@ class SupabaseAuthService:
         )
         # Quitamos una barra final para no producir URLs con `//auth/v1/...`.
         self._base_url = str(settings.supabase_url).rstrip("/")
+        self._frontend_url = str(settings.frontend_url).rstrip("/")
+
+    async def request_password_recovery(self, email: str) -> None:
+        """Pide a Supabase enviar el enlace al correo registrado.
+
+        El proveedor sólo enviará el correo si encuentra una cuenta asociada;
+        la API devuelve el mismo mensaje para correos existentes y desconocidos.
+        """
+        response = await self._client.post(
+            f"{self._base_url}/auth/v1/recover",
+            headers=self._headers,
+            params={"redirect_to": f"{self._frontend_url}/restablecer-contrasena"},
+            json={"email": email},
+        )
+        if response.status_code == 429:
+            raise AuthServiceError("Se alcanzó el límite de solicitudes. Espera antes de intentarlo otra vez.", 429)
+        if response.is_error:
+            raise AuthServiceError("No fue posible solicitar el cambio de contraseña. Intenta más tarde.", 502)
+
+    async def reset_password(self, access_token: str, password: str) -> None:
+        """Actualiza la clave del usuario usando el token temporal del correo."""
+        response = await self._client.put(
+            f"{self._base_url}/auth/v1/user",
+            headers={**self._headers, "Authorization": f"Bearer {access_token}"},
+            json={"password": password},
+        )
+        if response.status_code in (401, 403):
+            raise AuthServiceError("El enlace expiró o ya no es válido. Solicita uno nuevo.", 401)
+        if response.status_code == 429:
+            raise AuthServiceError("Se alcanzó el límite de intentos. Espera antes de volver a probar.", 429)
+        if response.is_error:
+            raise AuthServiceError("No se pudo actualizar la contraseña. Solicita un enlace nuevo.", 502)
+
+    async def resend_confirmation(self, email: str) -> None:
+        """Reenvía el correo de confirmación sin revelar el estado de la cuenta."""
+        response = await self._client.post(
+            f"{self._base_url}/auth/v1/resend",
+            headers=self._headers,
+            params={"redirect_to": f"{self._frontend_url}/login?verified=1"},
+            json={"type": "signup", "email": email},
+        )
+        if response.status_code == 429:
+            raise AuthServiceError("Se alcanzó el límite de solicitudes. Espera antes de intentarlo otra vez.", 429)
+        if response.is_error:
+            raise AuthServiceError("No fue posible reenviar el correo. Intenta más tarde.", 502)
 
     async def register(self, payload: PasswordConfirmationRequest) -> AuthResponse:
         """Solicita a Supabase la creación de una cuenta nueva.
@@ -57,6 +102,7 @@ class SupabaseAuthService:
             # Endpoint oficial de Supabase para alta de usuarios.
             f"{self._base_url}/auth/v1/signup",
             headers=self._headers,
+            params={"redirect_to": f"{self._frontend_url}/login?verified=1"},
             # `data` queda guardado como metadata en el usuario de Supabase Auth.
             json={
                 "email": str(payload.email),

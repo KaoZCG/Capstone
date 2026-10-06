@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     # URL del proyecto Supabase; Pydantic verifica que sea una URL HTTP válida.
     supabase_url: AnyHttpUrl = "https://example.supabase.co"
+    # URL pública de la app usada como destino del enlace enviado por correo.
+    frontend_url: AnyHttpUrl = "http://localhost:3000"
     # Clave pública usada por Supabase Auth; `min_length` evita una cadena vacía.
     supabase_anon_key: str = Field(default="not-configured", min_length=1)
     # Clave privada necesaria para consultar metadata de usuarios y detectar RUT duplicados.

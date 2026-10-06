@@ -157,6 +157,40 @@ class LoginRequest(BaseModel):
     )
 
 
+class PasswordRecoveryRequest(BaseModel):
+    """Correo al que Supabase enviará un enlace de recuperación."""
+
+    email: EmailStr
+
+
+class PasswordResetRequest(BaseModel):
+    """Nueva contraseña y confirmación para el enlace de recuperación."""
+
+    password: SecretStr = Field(min_length=8)
+    password_confirmation: SecretStr = Field(min_length=8)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: SecretStr) -> SecretStr:
+        password = value.get_secret_value()
+        if not re.search(r"[A-Z]", password) or not re.search(r"[a-z]", password) or not re.search(r"\d", password):
+            raise ValueError("La contraseña debe incluir mayúsculas, minúsculas y números")
+        return value
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "PasswordResetRequest":
+        if self.password.get_secret_value() != self.password_confirmation.get_secret_value():
+            raise ValueError("Las contraseñas no coinciden")
+        return self
+
+
+class AuthMessageResponse(BaseModel):
+    """Mensaje público sin datos sensibles de la cuenta."""
+
+    success: bool = True
+    message: str
+
+
 class AuthResponse(BaseModel):
     """Respuesta pública normalizada de Supabase Auth.
 

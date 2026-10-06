@@ -9,7 +9,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 # Tipos y lector de configuración de la aplicación.
 from app.core.config import Settings, get_settings
 # Modelos Pydantic que validan las entradas y serializan las salidas.
-from app.schemas.auth import AuthResponse, CurrentUserResponse, LoginRequest, PasswordConfirmationRequest
+from app.schemas.auth import (
+    AuthMessageResponse,
+    AuthResponse,
+    CurrentUserResponse,
+    LoginRequest,
+    PasswordConfirmationRequest,
+    PasswordRecoveryRequest,
+    PasswordResetRequest,
+)
 from app.schemas.data import PostulacionResponse, PostulacionStatusRequest, ProfileResponse
 # Servicio que contiene la comunicación y traducción de errores de Supabase Auth.
 from app.services.supabase_auth import AuthServiceError, SupabaseAuthService
@@ -87,6 +95,52 @@ async def login(
                 detail="Correo o contraseña incorrectos",
             ) from error
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/password-recovery", response_model=AuthMessageResponse, status_code=status.HTTP_202_ACCEPTED)
+async def request_password_recovery(
+    payload: PasswordRecoveryRequest,
+    service: SupabaseAuthService = Depends(get_auth_service),
+) -> AuthMessageResponse:
+    """Solicita un enlace sin revelar si el correo tiene una cuenta asociada."""
+    try:
+        await service.request_password_recovery(str(payload.email))
+    except AuthServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return AuthMessageResponse(
+        message="Si existe una cuenta asociada a ese correo, recibirás un enlace para cambiar tu contraseña.",
+    )
+
+
+@router.post("/resend-confirmation", response_model=AuthMessageResponse, status_code=status.HTTP_202_ACCEPTED)
+async def resend_confirmation(
+    payload: PasswordRecoveryRequest,
+    service: SupabaseAuthService = Depends(get_auth_service),
+) -> AuthMessageResponse:
+    """Reenvía el correo sin confirmar públicamente si la cuenta existe."""
+    try:
+        await service.resend_confirmation(str(payload.email))
+    except AuthServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return AuthMessageResponse(
+        message="Si la cuenta necesita confirmación, recibirás un nuevo correo con las instrucciones.",
+    )
+
+
+@router.post("/reset-password", response_model=AuthMessageResponse)
+async def reset_password(
+    payload: PasswordResetRequest,
+    authorization: str | None = Header(default=None),
+    service: SupabaseAuthService = Depends(get_auth_service),
+) -> AuthMessageResponse:
+    """Valida el token del correo y actualiza la contraseña en Supabase."""
+    user = await authenticated_user(authorization, service)
+    access_token = authorization.split(" ", 1)[1].strip()
+    try:
+        await service.reset_password(access_token, payload.password.get_secret_value())
+    except AuthServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return AuthMessageResponse(message=f"La contraseña de {user.email} se actualizó correctamente.")
 
 
 @router.get("/me", response_model=CurrentUserResponse)

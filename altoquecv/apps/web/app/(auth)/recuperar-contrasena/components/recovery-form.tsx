@@ -10,13 +10,19 @@ interface RecoveryFormProps {
 }
 
 export function RecoveryForm({ onSubmit, isLoading }: RecoveryFormProps) {
-  const [emailORut, setEmailORut] = useState('');
+  const [email, setEmail] = useState('');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = await onSubmit({ emailORut });
-    if (result.success) setSuccessMsg(result.mensaje);
+    setError(null);
+    try {
+      const result = await onSubmit({ email });
+      if (result.success) setSuccessMsg(result.mensaje);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'No fue posible enviar la solicitud.');
+    }
   };
 
   if (successMsg) {
@@ -35,11 +41,12 @@ export function RecoveryForm({ onSubmit, isLoading }: RecoveryFormProps) {
   return (
     <form onSubmit={handleSubmit} className="bg-surface-container rounded-container p-8 shadow-sm border border-border">
       <h1 className="text-headline-md text-on-surface mb-2 text-center">Recuperar Contraseña</h1>
-      <p className="text-body-sm text-on-surface-variant text-center mb-6">Ingrese su correo electrónico o RUT y le enviaremos un enlace para restablecer su contraseña.</p>
+      <p className="text-body-sm text-on-surface-variant text-center mb-6">Ingresa el correo asociado a tu cuenta y te enviaremos instrucciones para cambiar la contraseña.</p>
+      {error && <div role="alert" className="mb-4 rounded border border-error/30 bg-error-container/20 p-3 text-label-sm text-error">{error}</div>}
       
       <div className="mb-6">
-        <label className="block text-label-md text-on-surface mb-1">Email o RUT</label>
-        <input required value={emailORut} onChange={(e) => setEmailORut(e.target.value)} disabled={isLoading} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" placeholder="correo@ejemplo.com" />
+        <label className="block text-label-md text-on-surface mb-1">Correo electrónico</label>
+        <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} disabled={isLoading} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" placeholder="correo@ejemplo.com" />
       </div>
 
       <Button variant="primary" className="w-full justify-center" disabled={isLoading}>

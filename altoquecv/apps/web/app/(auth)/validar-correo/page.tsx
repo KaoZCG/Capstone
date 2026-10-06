@@ -1,74 +1,71 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { CheckCircle2, ShieldCheck } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import Link from 'next/link';
+import { CheckCircle2, MailCheck } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
 
-export default function ValidarCorreoPage() {
-  const router = useRouter();
-  const [code, setCode] = useState('');
+interface ValidarCorreoPageProps {
+  searchParams?: { email?: string };
+}
+
+export default function ValidarCorreoPage({ searchParams }: ValidarCorreoPageProps) {
+  const { resendConfirmation } = useAuth();
+  const [email, setEmail] = useState(searchParams?.email ?? '');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
-  // Validación: Solo permitir números y activar botón cuando sean 6 dígitos
-  const isCodeValid = /^\d{6}$/.test(code);
+  useEffect(() => {
+    if (searchParams?.email) setEmail(searchParams.email);
+  }, [searchParams?.email]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/\D/g, ''); // Filtrar no numéricos
-    if (value.length <= 6) setCode(value);
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!isCodeValid) return;
-
+    setError('');
+    setMessage('');
     setIsSubmitting(true);
-    // Simulación API
-    setTimeout(() => {
+    try {
+      const result = await resendConfirmation(email);
+      setMessage(result.mensaje);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'No fue posible reenviar el correo.');
+    } finally {
       setIsSubmitting(false);
-      router.push('/dashboard');
-    }, 1500);
+    }
   };
 
   return (
     <div className="min-h-screen bg-surface flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-surface-container-lowest border border-border rounded-2xl shadow-xl p-8 text-center">
         <div className="w-16 h-16 bg-success-container text-success rounded-full flex items-center justify-center mx-auto mb-6">
-          <ShieldCheck size={32} />
+          <MailCheck size={32} />
         </div>
         
-        <h1 className="text-2xl font-bold text-on-surface mb-2">Verifica tu correo</h1>
+        <h1 className="text-2xl font-bold text-on-surface mb-2">Confirma tu correo</h1>
         <p className="text-sm text-on-surface-variant mb-8">
-          Hemos enviado un código de 6 dígitos a tu bandeja de entrada. Ingresa el código abajo para activar tu Perfil Maestro.
+          {email ? <>Enviamos un enlace de confirmación a <strong>{email}</strong>. Ábrelo para activar tu cuenta.</> : 'Revisa el enlace de confirmación que enviamos a tu correo para activar la cuenta.'} Si no aparece, revisa también la carpeta de spam.
         </p>
 
-        <form onSubmit={handleSubmit}>
-          <div className="mb-6">
-            <input
-              type="text"
-              value={code}
-              onChange={handleChange}
-              placeholder="000000"
-              className="w-full text-center text-3xl tracking-[0.5em] font-bold py-4 bg-surface-container-low border border-border rounded-xl text-on-surface focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-surface-container-highest"
-            />
-          </div>
-
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {!email && <label className="block text-left text-label-md text-on-surface">Correo electrónico<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 focus:border-primary focus:outline-none" placeholder="correo@ejemplo.com" /></label>}
+          {message && <p role="status" className="rounded border border-success/30 bg-success-container/20 p-3 text-left text-sm text-success">{message}</p>}
+          {error && <p role="alert" className="rounded border border-error/30 bg-error-container/20 p-3 text-left text-sm text-error">{error}</p>}
           <button
             type="submit"
-            disabled={!isCodeValid || isSubmitting}
+            disabled={!email || isSubmitting}
             className={`w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all duration-200 ${
-              isCodeValid && !isSubmitting
+              email && !isSubmitting
                 ? 'bg-success text-white hover:shadow-lg hover:opacity-90'
                 : 'bg-surface-container-highest text-on-surface-variant cursor-not-allowed opacity-70'
             }`}
           >
-            {isSubmitting ? 'Verificando...' : 'Confirmar Código'}
+            {isSubmitting ? 'Enviando...' : 'Reenviar correo de confirmación'}
             {!isSubmitting && <CheckCircle2 size={18} />}
           </button>
         </form>
 
-        <button className="mt-6 text-sm font-semibold text-primary hover:underline">
-          Reenviar código
-        </button>
+        <Link href="/login" className="mt-6 inline-block text-sm font-semibold text-primary hover:underline">Volver al inicio de sesión</Link>
       </div>
     </div>
   );

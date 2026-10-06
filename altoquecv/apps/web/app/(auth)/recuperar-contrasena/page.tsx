@@ -3,39 +3,47 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { Mail, KeyRound, ArrowLeft } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
 
 export default function RecuperarContrasenaPage() {
+  const { recoverPassword } = useAuth();
   const [email, setEmail] = useState('');
-  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   // Validar formato de correo electrónico
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isEmailValid) return;
 
     setIsSubmitting(true);
-    // Simulación de envío a API
-    setTimeout(() => {
+    setError('');
+    try {
+      const result = await recoverPassword({ email });
+      setSuccessMessage(result.mensaje);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'No fue posible procesar la solicitud.');
+    } finally {
       setIsSubmitting(false);
-      setIsSubmitted(true);
-    }, 1500);
+    }
   };
 
   return (
     <div className="min-h-screen bg-surface flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-surface-container-lowest border border-border rounded-2xl shadow-xl p-8">
         
-        {isSubmitted ? (
+        {successMessage ? (
           <div className="text-center">
             <div className="w-16 h-16 bg-success-container text-success rounded-full flex items-center justify-center mx-auto mb-6">
               <Mail size={32} />
             </div>
             <h2 className="text-2xl font-bold text-on-surface mb-2">Enlace enviado</h2>
             <p className="text-sm text-on-surface-variant mb-8">
-              Revisa la bandeja de entrada de <strong>{email}</strong>. Te hemos enviado instrucciones para restablecer tu contraseña.
+              <span className="block mb-2">{successMessage}</span>
+              Revisa la bandeja de entrada y spam de <strong>{email}</strong>.
             </p>
             <Link href="/login" className="w-full block py-3 bg-surface-container text-on-surface font-medium rounded-lg hover:bg-surface-container-highest transition-colors">
               Volver al inicio de sesión
@@ -67,6 +75,7 @@ export default function RecuperarContrasenaPage() {
                   />
                 </div>
               </div>
+              {error && <p role="alert" aria-live="polite" className="-mt-3 rounded border border-error/30 bg-error-container/20 p-3 text-sm text-error">{error}</p>}
 
               <button
                 type="submit"

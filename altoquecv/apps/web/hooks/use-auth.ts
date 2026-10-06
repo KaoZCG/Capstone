@@ -16,6 +16,25 @@ function getApiError(body: Record<string, any>, fallback: string): string {
   return body.detail ?? fallback;
 }
 
+async function postAuthMessage(path: string, payload: Record<string, string>): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/auth/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error('No fue posible conectar con el servidor. Intenta nuevamente.');
+  }
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(getApiError(body, 'No fue posible completar la solicitud. Intenta nuevamente.'));
+  }
+  return body.message ?? 'Solicitud recibida.';
+}
+
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 export function useAuth(): AuthContextType {
@@ -115,6 +134,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (credentials.recuerdame) saveToStorage('altoquecv_remember_email', credentials.email);
       return { success: true };
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('No fue posible conectar con el servidor. Revisa tu conexión e intenta nuevamente.');
+      }
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -183,6 +207,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAccessToken(body.access_token ?? null);
       saveToStorage(AUTH_STORAGE_KEY, session);
       return { requires_email_confirmation: false };
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('No fue posible conectar con el servidor. Intenta crear la cuenta nuevamente.');
+      }
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -196,8 +225,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const recoverPassword = useCallback(async (data: PasswordRecoveryData) => {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    return { success: true, mensaje: 'Se ha enviado un enlace de recuperación a tu correo electrónico.' };
+    const mensaje = await postAuthMessage('password-recovery', { email: data.email });
+    return { success: true, mensaje };
+  }, []);
+
+  const resendConfirmation = useCallback(async (email: string) => {
+    const mensaje = await postAuthMessage('resend-confirmation', { email });
+    return { success: true, mensaje };
   }, []);
 
   return React.createElement(
@@ -212,6 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signup,
         logout,
         recoverPassword,
+        resendConfirmation,
       },
     },
     children

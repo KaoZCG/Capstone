@@ -32,34 +32,34 @@ export function SignupForm({ onSubmit, isLoading }: SignupFormProps) {
   return (
     <form onSubmit={handleSubmit} className="bg-surface-container rounded-container p-8 shadow-sm border border-border">
       <h1 className="text-headline-md text-on-surface mb-6 text-center">Crear Cuenta</h1>
-      {error && <div className="mb-4 p-3 bg-error-container/20 text-error text-label-sm rounded border border-error/30">{error}</div>}
+      {error && <div role="alert" aria-live="polite" className="mb-4 p-3 bg-error-container/20 text-error text-label-sm rounded border border-error/30">{error}</div>}
 
       <div className="space-y-4 mb-6">
         <div>
-          <label className="block text-label-md text-on-surface mb-1">Nombre Completo</label>
-          <input required value={formData.nombre} onChange={(e) => setFormData({...formData, nombre: e.target.value})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+          <label htmlFor="signup-name" className="block text-label-md text-on-surface mb-1">Nombre Completo</label>
+          <input id="signup-name" required value={formData.nombre} onChange={(e) => setFormData({...formData, nombre: e.target.value})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
         </div>
         
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-label-md text-on-surface mb-1">RUT</label>
-            <input required placeholder="12.345.678-9" value={formData.rut} onChange={(e) => setFormData({...formData, rut: e.target.value})} onBlur={(e) => setFormData({...formData, rut: formatRUT(e.target.value)})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+            <label htmlFor="signup-rut" className="block text-label-md text-on-surface mb-1">RUT</label>
+            <input id="signup-rut" required placeholder="12.345.678-9" value={formData.rut} onChange={(e) => setFormData({...formData, rut: e.target.value})} onBlur={(e) => setFormData({...formData, rut: formatRUT(e.target.value)})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
           </div>
           <div>
-            <label className="block text-label-md text-on-surface mb-1">Teléfono</label>
-            <input required placeholder="+56 9 1234 5678" value={formData.teléfono} onChange={(e) => setFormData({...formData, teléfono: e.target.value})} onBlur={(e) => setFormData({...formData, teléfono: normalizeChileanPhone(e.target.value)})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+            <label htmlFor="signup-phone" className="block text-label-md text-on-surface mb-1">Teléfono</label>
+            <input id="signup-phone" required placeholder="+56 9 1234 5678" value={formData.teléfono} onChange={(e) => setFormData({...formData, teléfono: e.target.value})} onBlur={(e) => setFormData({...formData, teléfono: normalizeChileanPhone(e.target.value)})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
           </div>
         </div>
 
         <div>
-          <label className="block text-label-md text-on-surface mb-1">Correo electrónico</label>
-          <input type="email" required value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+          <label htmlFor="signup-email" className="block text-label-md text-on-surface mb-1">Correo electrónico</label>
+          <input id="signup-email" type="email" required value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
         </div>
 
         <div>
-          <label className="block text-label-md text-on-surface mb-1">Contraseña</label>
+          <label htmlFor="signup-password" className="block text-label-md text-on-surface mb-1">Contraseña</label>
           <div className="relative">
-            <input type={showPassword ? "text" : "password"} required value={formData.contraseña} onChange={(e) => setFormData({...formData, contraseña: e.target.value})} className="w-full pl-4 pr-10 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+            <input id="signup-password" type={showPassword ? "text" : "password"} required value={formData.contraseña} onChange={(e) => setFormData({...formData, contraseña: e.target.value})} className="w-full pl-4 pr-10 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
             <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface">
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
@@ -68,8 +68,8 @@ export function SignupForm({ onSubmit, isLoading }: SignupFormProps) {
         </div>
 
         <div>
-          <label className="block text-label-md text-on-surface mb-1">Confirmar Contraseña</label>
-          <input type="password" required value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
+          <label htmlFor="signup-confirm-password" className="block text-label-md text-on-surface mb-1">Confirmar Contraseña</label>
+          <input id="signup-confirm-password" type="password" required value={confirmPwd} onChange={(e) => setConfirmPwd(e.target.value)} className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none" />
         </div>
 
         <label className="flex items-start gap-2 cursor-pointer mt-4">

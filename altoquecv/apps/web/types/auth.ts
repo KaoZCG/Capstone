@@ -31,7 +31,7 @@ export interface SignupData {
 }
 
 export interface PasswordRecoveryData {
-  emailORut: string;
+  email: string;
 }
 
 export interface AuthContextType {
@@ -43,4 +43,5 @@ export interface AuthContextType {
   signup: (data: SignupData) => Promise<{ requires_email_confirmation?: boolean; message?: string } | void>;
   logout: () => void;
   recoverPassword: (data: PasswordRecoveryData) => Promise<{ success: boolean; mensaje: string }>;
+  resendConfirmation: (email: string) => Promise<{ success: boolean; mensaje: string }>;
 }

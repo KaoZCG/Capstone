@@ -39,13 +39,13 @@ export function LoginForm({ onSubmit, isLoading }: LoginFormProps) {
     <form onSubmit={handleSubmit} className="bg-surface-container rounded-container p-8 shadow-sm border border-border">
       <h1 className="text-headline-md text-on-surface mb-6 text-center">Iniciar Sesión</h1>
       
-      {error && <div className="mb-4 p-3 bg-error-container/20 text-error text-label-sm rounded border border-error/30">{error}</div>}
+      {error && <div role="alert" aria-live="polite" className="mb-4 p-3 bg-error-container/20 text-error text-label-sm rounded border border-error/30">{error}</div>}
 
       <div className="space-y-4 mb-6">
         <div>
           <label className="block text-label-md text-on-surface mb-1">Correo electrónico</label>
           <input
-            type="email" required value={email} onChange={(e) => setEmail(e.target.value)} disabled={isLoading}
+            type="email" required value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} disabled={isLoading}
             className="w-full px-4 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none"
             placeholder="correo@ejemplo.com"
           />
@@ -55,7 +55,7 @@ export function LoginForm({ onSubmit, isLoading }: LoginFormProps) {
           <label className="block text-label-md text-on-surface mb-1">Contraseña</label>
           <div className="relative">
             <input
-              type={showPassword ? "text" : "password"} required value={password} onChange={(e) => setPassword(e.target.value)} disabled={isLoading}
+              type={showPassword ? "text" : "password"} required value={password} onChange={(e) => { setPassword(e.target.value); setError(null); }} disabled={isLoading}
               className="w-full pl-4 pr-10 py-2 bg-surface-container-lowest border border-border rounded-input text-on-surface focus:border-primary focus:outline-none"
               placeholder="••••••••"
             />

@@ -18,6 +18,7 @@ export interface Postulacion {
   compatibilidad: number;
   status: PostulacionStatus;
   fechaPostulacion: string;
+  url_oferta?: string;
   descripcionOferta?: string;
   competenciasCubiertas?: string[];
   proximoPaso?: string;

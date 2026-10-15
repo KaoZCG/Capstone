@@ -1,42 +1,88 @@
 import { useState, useEffect } from 'react';
 import { Postulacion, PostulacionStatus } from '@/types';
-import { postulacionesMockFactory } from '@/lib/mock/postulaciones.mock';
-import { loadFromStorage, saveToStorage } from '@/lib/storage';
+import { useAuth } from './use-auth';
 
-const STORAGE_KEY = 'altoquecv_postulaciones';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
 export function usePostulaciones() {
+  const { accessToken } = useAuth();
   const [postulaciones, setPostulaciones] = useState<Postulacion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const saved = loadFromStorage<Postulacion[]>(STORAGE_KEY);
-    if (saved && saved.length > 0) {
-      setPostulaciones(saved);
-    } else {
-      const mocked = postulacionesMockFactory();
-      setPostulaciones(mocked);
-      saveToStorage(STORAGE_KEY, mocked);
-    }
-    setIsLoading(false);
-  }, []);
+    let cancelled = false;
 
-  const movePostulacion = (id: string, nuevoStatus: PostulacionStatus) => {
-    setPostulaciones((prev) => {
-      const updated = prev.map((p) =>
-        p.id === id ? { ...p, status: nuevoStatus } : p
-      );
-      saveToStorage(STORAGE_KEY, updated);
-      return updated;
+    async function loadPostulaciones() {
+      if (!accessToken) {
+        setPostulaciones([]);
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        const response = await fetch(`${API_URL}/auth/postulaciones`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!response.ok) throw new Error('No fue posible cargar las postulaciones');
+        const data = await response.json();
+        if (!cancelled) setPostulaciones(data);
+      } catch {
+        if (!cancelled) setPostulaciones([]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    void loadPostulaciones();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
+  const movePostulacion = async (id: string, nuevoStatus: PostulacionStatus) => {
+    if (!accessToken) return;
+    const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: nuevoStatus }),
     });
+    if (!response.ok) return;
+    setPostulaciones((prev) => prev.map((postulacion) =>
+      postulacion.id === id ? { ...postulacion, status: nuevoStatus } : postulacion
+    ));
   };
 
-  const deletePostulacion = (id: string) => {
-    setPostulaciones((prev) => {
-      const updated = prev.filter((p) => p.id !== id);
-      saveToStorage(STORAGE_KEY, updated);
-      return updated;
+  const createPostulacion = async (input: { cargo: string; empresa: string; url_oferta: string }) => {
+    if (!accessToken) throw new Error('Inicia sesión para registrar la postulación.');
+    const response = await fetch(`${API_URL}/auth/postulaciones`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
     });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(typeof data?.detail === 'string' ? data.detail : 'No fue posible registrar la postulación.');
+    }
+    const postulacion = data as Postulacion;
+    setPostulaciones((prev) => [postulacion, ...prev.filter((item) => item.id !== postulacion.id)]);
+    return postulacion;
+  };
+
+  const deletePostulacion = async (id: string) => {
+    if (!accessToken) return;
+    const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return;
+    setPostulaciones((prev) => prev.filter((postulacion) => postulacion.id !== id));
   };
 
   const getByStatus = (status: PostulacionStatus) =>
@@ -56,6 +102,7 @@ export function usePostulaciones() {
     postulaciones,
     isLoading,
     movePostulacion,
+    createPostulacion,
     deletePostulacion,
     getByStatus,
     search,

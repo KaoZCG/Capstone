@@ -22,6 +22,17 @@ export function ScoreBreakdown({ desglose }: { desglose: CompatibilidadWidget['d
           <div className="h-full bg-primary rounded-full" style={{ width: `${desglose.nivelExperiencia}%` }} />
         </div>
       </div>
+      {desglose.formacionAcademica !== undefined && (
+        <div>
+          <div className="flex justify-between mb-1 text-xs">
+            <span>Formación académica</span>
+            <span className="font-semibold text-primary">{desglose.formacionAcademica}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+            <div className="h-full bg-primary rounded-full" style={{ width: `${desglose.formacionAcademica}%` }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,15 @@
+'use client';
+
 import { Bell, Search } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { Avatar } from "@/components/ui/Avatar";
 import { Input } from "@/components/ui/Input";
+import { useAuth } from '@/hooks/use-auth';
 
 export function Topbar() {
+  const { usuario } = useAuth();
+  const displayName = usuario?.nombre ?? 'Usuario';
+
   return (
     <header className="sticky top-0 z-10 h-16 bg-surface-container-lowest border-b border-border flex items-center justify-between px-8">
       <div className="w-96 relative">
@@ -20,10 +26,10 @@ export function Topbar() {
         <div className="w-px h-6 bg-border mx-2"></div>
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
-            <p className="text-label-md text-on-surface">Rodrigo S.</p>
+            <p className="text-label-md text-on-surface">{displayName}</p>
             <p className="text-label-sm text-on-surface-variant">Candidato Pro</p>
           </div>
-          <Avatar src="professional_studio_headshot_of_a_chilean_professional_man_in_his_late_20s.png" alt="Rodrigo S." size="sm" />
+          <Avatar src="professional_studio_headshot_of_a_chilean_professional_man_in_his_late_20s.png" alt={displayName} size="sm" />
         </div>
       </div>
     </header>

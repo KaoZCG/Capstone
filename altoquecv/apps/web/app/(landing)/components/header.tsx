@@ -1,54 +1,71 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useAuth } from '@/hooks/use-auth';
-import { Button } from '@/components/ui/Button';
-import { ThemeToggle } from '@/components/layout/ThemeToggle'; // ← AGREGAR
-import { Menu } from 'lucide-react'; // ← ya no necesitas Moon, Sun aquí
+import { Sun, Moon } from 'lucide-react';
 
 export function LandingHeader() {
-  const { usuario, isAuthenticated } = useAuth();
+  const [darkMode, setDarkMode] = useState(false);
+
+  // Alternar Modo Oscuro (Modificación de clase en html/body para Tailwind)
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border bg-surface/80 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-primary text-on-primary rounded font-bold text-xs flex items-center justify-center">A</div>
-          <span className="font-bold text-lg text-on-surface">AltoqueCV</span>
-        </div>
+    <header className="sticky top-0 z-50 w-full border-b border-border bg-surface/80 backdrop-blur-md px-6 py-4">
+      <div className="max-w-7xl mx-auto flex items-center justify-between">
+        
+        {/* Logo */}
+        <Link href="/" className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-primary text-white rounded-lg font-extrabold text-lg flex items-center justify-center">A</div>
+          <span className="text-xl font-bold text-on-surface tracking-tight">Altoque<span className="text-primary">CV</span></span>
+        </Link>
 
+        {/* Links de Navegación */}
         <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-on-surface-variant">
-          <a href="#caracteristicas" className="hover:text-primary transition-colors">Características</a>
-          <a href="#como-funciona" className="hover:text-primary transition-colors">Cómo funciona</a>
-          <a href="#testimonios" className="hover:text-primary transition-colors">Testimonios</a>
-          <a href="#precios" className="hover:text-primary transition-colors">Precios</a>
+          <Link href="#inicio" className="hover:text-primary transition-colors">Inicio</Link>
+          <Link href="#caracteristicas" className="hover:text-primary transition-colors">Características</Link>
+          <Link href="#como-funciona" className="hover:text-primary transition-colors">Cómo funciona</Link>
+          
         </nav>
 
+        {/* Acciones & Configuración */}
         <div className="flex items-center gap-4">
-          <ThemeToggle /> {/* ← REEMPLAZO */}
-
-          <div className="hidden md:flex items-center gap-3">
-            {!isAuthenticated ? (
-              <>
-                <Link href="/login" className="text-sm font-medium text-on-surface hover:text-primary transition-colors">
-                  Iniciar Sesión
-                </Link>
-                <Link href="/signup">
-                  <Button variant="primary">Comenzar Gratis</Button>
-                </Link>
-              </>
+          
+          {/* Botón Modo Oscuro */}
+          <button 
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-2 rounded-lg bg-surface-container-low border border-border text-on-surface-variant hover:text-on-surface transition-all flex items-center gap-1.5"
+            aria-label="Alternar modo oscuro"
+          >
+            {darkMode ? (
+              <Sun size={18} className="text-amber-500" />
             ) : (
-              <Link href="/perfil-maestro">
-                <Button variant="primary">Mi Perfil Maestro</Button>
-              </Link>
+              <Moon size={18} className="text-slate-700" />
             )}
-          </div>
-
-          <button className="md:hidden text-on-surface">
-            <Menu size={24} />
           </button>
+
+          {/* Acceso a Auth */}
+          <Link 
+            href="/login" 
+            className="hidden sm:inline-block px-4 py-2 text-sm font-semibold text-on-surface hover:bg-surface-container-high rounded-lg border border-border transition-all"
+          >
+            Iniciar sesión
+          </Link>
+
+          <Link 
+            href="/signup" 
+            className="px-4 py-2 text-sm font-semibold text-white bg-primary hover:bg-primary/95 hover:shadow-md transition-all rounded-lg"
+          >
+            Crear cuenta
+          </Link>
         </div>
+
       </div>
     </header>
   );

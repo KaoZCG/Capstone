@@ -1,9 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { SyncConsoleState, SyncLogEntry, PortalName } from '@/types';
-import { generateInitialLogs } from '@/lib/mock/sync-console.mock';
 import { loadFromStorage, saveToStorage } from '@/lib/storage';
 
-const CONSOLE_STORAGE_KEY = 'altoquecv_sync_console';
+const CONSOLE_STORAGE_KEY = 'altoquecv_sync_console_v2';
 
 export function useSyncConsole() {
   const [state, setState] = useState<SyncConsoleState>({
@@ -14,12 +13,16 @@ export function useSyncConsole() {
   useEffect(() => {
     const saved = loadFromStorage<SyncConsoleState>(CONSOLE_STORAGE_KEY);
     if (saved) {
-      setState(saved);
+      const filtered = {
+        ...saved,
+        logs: saved.logs.filter((log) => String(log.portal) !== 'laborum'),
+      };
+      setState(filtered);
+      saveToStorage(CONSOLE_STORAGE_KEY, filtered);
     } else {
       const initial = {
-        logs: generateInitialLogs(),
+        logs: [],
         sincronizandoAhora: false,
-        ultimaSincronizacion: new Date(Date.now() - 600000).toISOString(),
       };
       setState(initial);
       saveToStorage(CONSOLE_STORAGE_KEY, initial);
@@ -45,10 +48,10 @@ export function useSyncConsole() {
       timestamp: new Date().toISOString(),
       tipo: 'info',
       portal,
-      mensaje: `Iniciando escaneo en ${portal}...`,
+      mensaje: `Iniciando sincronización de demostración en ${portal}...`,
     });
 
-    // Simula el tiempo de la API / Web Scraping
+    // La consola muestra una animación local; no consulta portales ni agrega ofertas.
     setTimeout(() => {
       addLog({
         id: `log-${Date.now() + 1}`,
@@ -56,7 +59,7 @@ export function useSyncConsole() {
         tipo: 'success',
         portal,
         mensaje: 'Sincronización completada con éxito',
-        detalles: `Se revisaron las últimas 24 hrs. 2 ofertas añadidas al embudo.`,
+        detalles: 'Demostración local completada. No se consultaron ni guardaron ofertas.',
       });
 
       setState((prev) => ({

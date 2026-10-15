@@ -17,6 +17,9 @@ export interface Education {
   startDate: string;
   endDate: string | "Presente";
   tags: string[];
+  location?: string;
+  studyMode?: string;
+  description?: string;
 }
 
 export interface Experience {
@@ -28,6 +31,8 @@ export interface Experience {
   isCurrent: boolean;
   description: string;
   stackTags: string[];
+  location?: string;
+  employmentType?: string;
 }
 
 export interface IAPreference {

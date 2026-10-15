@@ -1,13 +1,43 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useContext, createContext } from 'react';
+import React, { useState, useEffect, useCallback, useContext, createContext, type ReactNode } from 'react';
 import { User, AuthContextType, LoginCredentials, SignupData, PasswordRecoveryData } from '@/types';
-import { isValidRUT, isValidEmail, validatePassword, isTokenExpired } from '@/lib/auth';
-import { validateMockCredentials, createMockUser, createMockAuthSession } from '@/lib/mock/auth.mock';
+import { formatRUT, isValidChileanPhone, isValidRUT, isValidEmail, isValidPersonName, normalizeChileanPhone, validatePassword, isTokenExpired } from '@/lib/auth';
 import { loadFromStorage, saveToStorage } from '@/lib/storage';
 import { useRouter } from 'next/navigation';
 
 const AUTH_STORAGE_KEY = 'altoquecv_auth_session';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
+
+function notifyExtensionSessionChanged() {
+  window.dispatchEvent(new Event('altoquecv:auth-session-updated'));
+}
+
+function getApiError(body: Record<string, any>, fallback: string): string {
+  if (Array.isArray(body.detail)) {
+    return body.detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join('. ') || fallback;
+  }
+  return body.detail ?? fallback;
+}
+
+async function postAuthMessage(path: string, payload: Record<string, string>): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/auth/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error('No fue posible conectar con el servidor. Intenta nuevamente.');
+  }
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(getApiError(body, 'No fue posible completar la solicitud. Intenta nuevamente.'));
+  }
+  return body.message ?? 'Solicitud recibida.';
+}
 
 export const AuthContext = createContext<AuthContextType | null>(null);
 
@@ -17,38 +47,104 @@ export function useAuth(): AuthContextType {
   return context;
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+function normalizeUserFromResponse(payload: Record<string, any>, fallbackEmail?: string): User {
+  const firstName = payload.first_name ?? payload.firstName ?? '';
+  const rawLastName = payload.last_name ?? payload.lastName ?? '';
+  const lastName = rawLastName === 'Usuario' && firstName ? '' : rawLastName;
+  const nombre = [firstName, lastName].filter(Boolean).join(' ') || 'Usuario';
+
+  return {
+    id: payload.user_id ?? payload.id ?? fallbackEmail ?? `user-${Date.now()}`,
+    nombre,
+    email: payload.email ?? fallbackEmail ?? '',
+    rut: payload.rut ?? '',
+    teléfono: payload.telefono ?? payload.phone ?? '',
+    rol: 'usuario',
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [usuario, setUsuario] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
-    const saved = loadFromStorage<{ usuario: User; token: string; expiresAt: string }>(AUTH_STORAGE_KEY);
-    if (saved) {
-      if (!isTokenExpired(saved.token) && new Date(saved.expiresAt) > new Date()) {
-        setUsuario(saved.usuario);
-      } else {
+    let cancelled = false;
+
+    async function restoreSession() {
+      const saved = loadFromStorage<{ usuario: User; token: string; expiresAt: string }>(AUTH_STORAGE_KEY);
+      if (!saved || isTokenExpired(saved.token) || new Date(saved.expiresAt) <= new Date()) {
         localStorage.removeItem(AUTH_STORAGE_KEY);
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+          headers: { Authorization: `Bearer ${saved.token}` },
+        });
+        if (!response.ok) throw new Error('Sesión inválida');
+
+        const currentUser = await response.json();
+        const user = normalizeUserFromResponse(currentUser, saved.usuario.email);
+        if (!cancelled) {
+          setUsuario(user);
+          setAccessToken(saved.token);
+          saveToStorage(AUTH_STORAGE_KEY, { ...saved, usuario: user });
+          notifyExtensionSessionChanged();
+        }
+      } catch {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     }
-    setIsLoading(false);
+
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
     setIsLoading(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      const validation = validateMockCredentials(credentials.email, credentials.contraseña);
-      
-      if (!validation.success) throw new Error(validation.error || 'Credenciales inválidas');
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: credentials.email,
+          password: credentials.contraseña,
+        }),
+      });
 
-      const user = validation.user!;
-      const session = createMockAuthSession(user);
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.access_token) {
+        throw new Error(getApiError(data, 'Credenciales inválidas'));
+      }
+
+      const user = normalizeUserFromResponse(data, credentials.email);
+      const session = {
+        usuario: user,
+        token: data.access_token,
+        expiresAt: new Date(Date.now() + ((data.expires_in ?? 3600) * 1000)).toISOString(),
+      };
 
       setUsuario(user);
+      setAccessToken(data.access_token);
       saveToStorage(AUTH_STORAGE_KEY, session);
+      notifyExtensionSessionChanged();
 
       if (credentials.recuerdame) saveToStorage('altoquecv_remember_email', credentials.email);
+      return { success: true };
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('No fue posible conectar con el servidor. Revisa tu conexión e intenta nuevamente.');
+      }
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -57,24 +153,71 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signup = useCallback(async (data: SignupData) => {
     setIsLoading(true);
     try {
-      if (!isValidRUT(data.rut)) throw new Error('RUT inválido (formato: NN.NNN.NNN-N)');
+      const rut = formatRUT(data.rut);
+      if (!isValidPersonName(data.nombre)) throw new Error('El nombre solo puede contener letras, espacios, guiones o apóstrofes');
+      if (!isValidRUT(rut)) throw new Error('RUT inválido: revisa el dígito verificador');
       if (!isValidEmail(data.email)) throw new Error('Email inválido');
+      if (!isValidChileanPhone(data.teléfono)) throw new Error('El teléfono debe tener formato +569XXXXXXXX');
       const pwdValidation = validatePassword(data.contraseña);
       if (!pwdValidation.valid) throw new Error('Contraseña no cumple requisitos de seguridad');
       if (!data.aceptoTerminos) throw new Error('Debes aceptar los términos y condiciones');
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const confirmation = data.confirmarContraseña ?? data.contraseña;
+      if (data.contraseña !== confirmation) throw new Error('Las contraseñas no coinciden');
 
-      const newUser = createMockUser({
-        nombre: data.nombre,
-        rut: data.rut,
+      const [firstName, ...restName] = (data.nombre || '').trim().split(/\s+/).filter(Boolean);
+      const payload = {
         email: data.email,
-        teléfono: data.teléfono,
+        password: data.contraseña,
+        password_confirmation: confirmation,
+        first_name: firstName || 'Usuario',
+        last_name: restName.join(' ') || 'Usuario',
+        rut,
+        telefono: normalizeChileanPhone(data.teléfono),
+        acepto_terminos: data.aceptoTerminos,
+      };
+
+      const response = await fetch(`${API_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
 
-      const session = createMockAuthSession(newUser);
-      setUsuario(newUser);
+      const body = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(getApiError(body, 'No fue posible crear la cuenta.'));
+      }
+
+      if (body.requires_email_confirmation) {
+        return { requires_email_confirmation: true, message: 'Cuenta creada. Revisa tu correo para confirmar tu cuenta.' };
+      }
+
+      const user = normalizeUserFromResponse(
+        {
+          user_id: body.user_id,
+          email: body.email,
+          first_name: body.first_name ?? firstName,
+          last_name: body.last_name ?? (restName.join(' ') || 'Usuario'),
+        },
+        data.email,
+      );
+
+      const session = {
+        usuario: user,
+        token: body.access_token ?? '',
+        expiresAt: new Date(Date.now() + ((body.expires_in ?? 3600) * 1000)).toISOString(),
+      };
+
+      setUsuario(user);
+      setAccessToken(body.access_token ?? null);
       saveToStorage(AUTH_STORAGE_KEY, session);
+      return { requires_email_confirmation: false };
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('No fue posible conectar con el servidor. Intenta crear la cuenta nuevamente.');
+      }
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -82,13 +225,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     setUsuario(null);
+    setAccessToken(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    notifyExtensionSessionChanged();
     router.push('/login');
   }, [router]);
 
   const recoverPassword = useCallback(async (data: PasswordRecoveryData) => {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    return { success: true, mensaje: 'Se ha enviado un enlace de recuperación a tu correo electrónico.' };
+    const mensaje = await postAuthMessage('password-recovery', { email: data.email });
+    return { success: true, mensaje };
+  }, []);
+
+  const resendConfirmation = useCallback(async (email: string) => {
+    const mensaje = await postAuthMessage('resend-confirmation', { email });
+    return { success: true, mensaje };
   }, []);
 
   return React.createElement(
@@ -96,12 +246,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     {
       value: {
         usuario,
+        accessToken,
         isLoading,
         isAuthenticated: !!usuario,
         login,
         signup,
         logout,
         recoverPassword,
+        resendConfirmation,
       },
     },
     children

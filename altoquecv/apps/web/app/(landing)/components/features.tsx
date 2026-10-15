@@ -6,7 +6,7 @@ export function Features() {
     { icon: BrainCircuit, title: "Análisis ATS en tiempo real", desc: "El widget evalúa tu perfil contra cualquier oferta laboral antes de que postules." },
     { icon: FileSignature, title: "Optimización automática", desc: "El motor de IA ajusta tu CV resaltando la experiencia exacta que busca el reclutador." },
     { icon: Zap, title: "Autocompletado inteligente", desc: "Rellena formularios tediosos de portales de empleo en un solo clic, sin equivocaciones." },
-    { icon: RefreshCw, title: "Sincronización multiportal", desc: "Funciona nativamente sobre Laborum, Trabajando.com, LinkedIn, ChileTrabajos y CompuTrabajo." },
+    { icon: RefreshCw, title: "Asistencia en portales de empleo", desc: "Analiza ofertas que agregas a tu cuenta y te ayuda a completar formularios. En Laborum, los datos de la oferta se ingresan manualmente." },
   ];
 
   return (

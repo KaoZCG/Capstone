@@ -1,7 +1,8 @@
 {
   "extends": "plasmo/templates/tsconfig.base",
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".plasmo/static"
   ],
   "include": [
     ".plasmo/index.d.ts",
@@ -9,12 +10,11 @@
     "./**/*.tsx"
   ],
   "compilerOptions": {
-    "ignoreDeprecations": "6.0",
+    "moduleResolution": "bundler",
     "paths": {
       "~*": [
         "./src/*"
       ]
-    },
-    "baseUrl": "."
+    }
   }
 }

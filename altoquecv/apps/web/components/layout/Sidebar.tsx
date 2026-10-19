@@ -2,13 +2,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Briefcase, User, Sparkles, Settings, LogOut, Menu, X } from "lucide-react";
+import { BarChart3, Briefcase, User, Sparkles, Settings, LogOut, Menu, X, Search } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from '@/hooks/use-auth'
 
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: BarChart3 },
   { label: "Mis Postulaciones", href: "/mis-postulaciones", icon: Briefcase },
+  { label: "Ofertas Laborum", href: "/ofertas", icon: Search },
   { label: "Mi Perfil Maestro", href: "/perfil-maestro", icon: User },
   { label: "Adaptador de CV (IA)", href: "/adaptador", icon: Sparkles },
   { label: "Configuración & Portales", href: "/configuracion", icon: Settings },

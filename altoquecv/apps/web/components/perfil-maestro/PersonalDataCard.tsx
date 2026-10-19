@@ -14,8 +14,7 @@ export function PersonalDataCard({ data }: { data: UserProfile["personalData"] }
       
       <div className="flex flex-col md:flex-row gap-8">
         <div className="flex flex-col items-center gap-4 shrink-0">
-          <Avatar src="professional_studio_headshot_of_a_chilean_professional_man_in_his_late_20s.png" alt={data.fullName} size="lg" />
-          <button className="text-label-sm text-primary hover:underline font-medium">Cambiar foto</button>
+          <Avatar alt={data.fullName} size="lg" />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">

@@ -2,9 +2,16 @@ node_modules
 **/node_modules
 .next
 **/.next
+.next-*
+**/.next-*
+**/tsconfig.tsbuildinfo
 backend/.venv
 backend/.pytest_cache
 backend/.env
+**/.env
+**/__pycache__
+**/*.py[cod]
+docs_extra_text
 .git
 .gitignore
 *.log

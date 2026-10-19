@@ -9,6 +9,10 @@ import { useRouter } from 'next/navigation';
 const AUTH_STORAGE_KEY = 'altoquecv_auth_session';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
+function notifyExtensionSessionChanged() {
+  window.dispatchEvent(new Event('altoquecv:auth-session-updated'));
+}
+
 function getApiError(body: Record<string, any>, fallback: string): string {
   if (Array.isArray(body.detail)) {
     return body.detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join('. ') || fallback;
@@ -89,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUsuario(user);
           setAccessToken(saved.token);
           saveToStorage(AUTH_STORAGE_KEY, { ...saved, usuario: user });
+          notifyExtensionSessionChanged();
         }
       } catch {
         localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -131,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUsuario(user);
       setAccessToken(data.access_token);
       saveToStorage(AUTH_STORAGE_KEY, session);
+      notifyExtensionSessionChanged();
 
       if (credentials.recuerdame) saveToStorage('altoquecv_remember_email', credentials.email);
       return { success: true };
@@ -221,6 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUsuario(null);
     setAccessToken(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    notifyExtensionSessionChanged();
     router.push('/login');
   }, [router]);
 

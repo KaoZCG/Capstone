@@ -56,6 +56,25 @@ export function usePostulaciones() {
     ));
   };
 
+  const createPostulacion = async (input: { cargo: string; empresa: string; url_oferta: string }) => {
+    if (!accessToken) throw new Error('Inicia sesión para registrar la postulación.');
+    const response = await fetch(`${API_URL}/auth/postulaciones`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(typeof data?.detail === 'string' ? data.detail : 'No fue posible registrar la postulación.');
+    }
+    const postulacion = data as Postulacion;
+    setPostulaciones((prev) => [postulacion, ...prev.filter((item) => item.id !== postulacion.id)]);
+    return postulacion;
+  };
+
   const deletePostulacion = async (id: string) => {
     if (!accessToken) return;
     const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
@@ -83,6 +102,7 @@ export function usePostulaciones() {
     postulaciones,
     isLoading,
     movePostulacion,
+    createPostulacion,
     deletePostulacion,
     getByStatus,
     search,

@@ -1,5 +1,4 @@
 export type PortalName =
-  | 'laborum'
   | 'trabajando'
   | 'linkedin'
   | 'chile-trabajos'

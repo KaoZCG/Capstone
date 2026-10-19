@@ -1,19 +1,75 @@
 "use client";
 
 import { PhoneInput } from '@/components/ui/PhoneInput';
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
+import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { useAuth } from '@/hooks/use-auth';
 import { useProfile } from '@/hooks/use-profile';
 import { Education, Experience } from '@/types/perfil';
 import { PROFILE_KEYWORD_CATEGORIES, TECHNICAL_SKILL_CATEGORIES } from '@/lib/profile-catalogs';
-import { Search, Trash2, X } from 'lucide-react';
+import { getNationalPhoneNumber, toInternationalPhoneNumber } from '@/lib/auth';
+import chileLocations from '@/lib/chile-locations.json';
+import { Download, FileText, Pencil, Search, Trash2, UserRound, X } from 'lucide-react';
+import CargadorCV from '@/components/perfil-maestro/CargadorCV';
+import { deleteOriginalProfileCV, loadOriginalProfileCV, type StoredProfileCV } from '@/lib/profile-cv-storage';
+import { useProfileAvatar } from '@/hooks/use-profile-avatar';
 
-type ProfileModal = 'education' | 'experience' | 'skills' | 'keywords' | null;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
+
+type ProfileModal = 'education' | 'experience' | 'skills' | 'keywords' | 'confirmClear' | null;
+
+const CHILE_REGIONS = chileLocations.regions;
+
+function formatFileSize(bytes: number): string {
+  return bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function normalizeExperiencePart(value: string | undefined): string {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('es-CL');
+}
+
+function isOnlyExperienceSectionNoise(role: string | undefined): boolean {
+  const words = normalizeExperiencePart(role).match(/[a-z0-9]+/g) ?? [];
+  const sectionLabels = new Set([
+    'academica',
+    'academicas',
+    'academico',
+    'academicos',
+    'destacable',
+    'experiencia',
+    'formacion',
+    'laboral',
+    'profesional',
+  ]);
+  return words.length === 0 || words.every((word) => sectionLabels.has(word));
+}
+
+function deduplicateExperiences(items: Experience[]): Experience[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = [
+      item.company,
+      item.role,
+      item.startDate,
+      item.endDate === 'Presente' ? 'presente' : item.endDate,
+    ].map(normalizeExperiencePart).join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 const initialSalaryData = {
   min: '',
@@ -56,8 +112,8 @@ const tabs = [
 ];
 
 export default function PerfilMaestroPage() {
-  const { usuario } = useAuth();
-  const { profile, isLoading } = useProfile();
+  const { usuario, accessToken, isLoading: isAuthLoading } = useAuth();
+  const { profile, isLoading, error: profileLoadError } = useProfile();
   const [activeTab, setActiveTab] = useState(tabs[0]);
   const [education, setEducation] = useState<Education[]>([]);
   const [experience, setExperience] = useState<Experience[]>([]);
@@ -66,12 +122,24 @@ export default function PerfilMaestroPage() {
   const [modal, setModal] = useState<ProfileModal>(null);
   const [educationForm, setEducationForm] = useState(emptyEducationForm);
   const [experienceForm, setExperienceForm] = useState(emptyExperienceForm);
+  const [editingExperienceId, setEditingExperienceId] = useState<string | null>(null);
   const [catalogSearch, setCatalogSearch] = useState('');
   const [customCatalogValue, setCustomCatalogValue] = useState('');
   const [savedAt, setSavedAt] = useState('');
+  const [savedOriginalCV, setSavedOriginalCV] = useState<StoredProfileCV | null>(null);
+  const [isLoadingOriginalCV, setIsLoadingOriginalCV] = useState(true);
+  const [hasProcessedCV, setHasProcessedCV] = useState(false);
+  const [showDeletePanel, setShowDeletePanel] = useState(false);
+  const [isClearingProfile, setIsClearingProfile] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [hydratedKey, setHydratedKey] = useState('');
   const storageKey = `altoquecv-profile:${profile?.user_id ?? usuario?.email ?? 'local'}`;
-  
+  const cvOwnerId = profile?.user_id ?? usuario?.id ?? usuario?.email ?? 'local';
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [avatarError, setAvatarError] = useState('');
+  const { avatarUrl, updateAvatar } = useProfileAvatar(cvOwnerId);
+
   const [personalData, setPersonalData] = useState({
     nombre: usuario?.nombre || '',
     rut: usuario?.rut || '',
@@ -91,51 +159,90 @@ export default function PerfilMaestroPage() {
   useEffect(() => {
     if (isLoading) return;
 
+    let saved: Record<string, any> | null = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
+    } catch (error) {
+      console.error('No se pudo leer el perfil guardado en este navegador:', error);
+    }
+    const savedPersonalData = saved?.personalData ?? {};
+    const savedSalaryData = saved?.salaryData ?? {};
+    const countryCode = savedPersonalData.codigoTeléfono || '+56';
     const defaults = {
       ...personalData,
       nombre: profile
         ? `${profile.first_name} ${profile.last_name}`.trim()
-        : usuario?.nombre ?? '',
-      rut: profile?.rut ?? usuario?.rut ?? '',
-      email: profile?.email ?? usuario?.email ?? '',
-      teléfono: profile?.phone ?? usuario?.teléfono ?? '',
+        : savedPersonalData.nombre ?? usuario?.nombre ?? '',
+      rut: profile?.rut ?? savedPersonalData.rut ?? usuario?.rut ?? '',
+      email: profile?.email ?? savedPersonalData.email ?? usuario?.email ?? '',
+      teléfono: getNationalPhoneNumber(
+        profile ? profile.phone ?? '' : savedPersonalData.teléfono ?? usuario?.teléfono ?? '',
+        countryCode,
+      ),
     };
 
-    try {
-      const savedProfile = localStorage.getItem(storageKey);
-      if (savedProfile) {
-        const saved = JSON.parse(savedProfile);
-        setPersonalData({ ...defaults, ...saved.personalData });
-        setEducation(saved.education ?? profile?.education ?? []);
-        setExperience(saved.experience ?? profile?.experience ?? []);
-        setSkills(saved.skills ?? profile?.skills ?? []);
-        setKeywords(saved.keywords ?? []);
-        setSalaryData({
-          ...initialSalaryData,
-          ...saved.salaryData,
-          min: saved.salaryData?.min ?? profile?.salary_min?.toString() ?? '',
-          max: saved.salaryData?.max ?? profile?.salary_max?.toString() ?? '',
-        });
-      } else {
-        setPersonalData(defaults);
-        setEducation(profile?.education ?? []);
-        setExperience(profile?.experience ?? []);
-        setSkills(profile?.skills ?? []);
-        setSalaryData({
-          ...initialSalaryData,
-          min: profile?.salary_min?.toString() ?? '',
-          max: profile?.salary_max?.toString() ?? '',
-        });
-      }
-      setHydratedKey(storageKey);
-    } catch {
-      setPersonalData(defaults);
-      setEducation(profile?.education ?? []);
-      setExperience(profile?.experience ?? []);
-      setSkills(profile?.skills ?? []);
-      setHydratedKey(storageKey);
-    }
+    setPersonalData({
+      ...savedPersonalData,
+      ...defaults,
+      nombre: profile ? defaults.nombre : savedPersonalData.nombre ?? defaults.nombre,
+      rut: profile ? defaults.rut : savedPersonalData.rut?.trim() || defaults.rut,
+      email: profile ? defaults.email : savedPersonalData.email ?? defaults.email,
+      teléfono: profile
+        ? defaults.teléfono
+        : getNationalPhoneNumber(savedPersonalData.teléfono ?? defaults.teléfono, countryCode),
+      codigoTeléfono: countryCode,
+    });
+    setEducation(profile?.education ?? saved?.education ?? []);
+    setExperience(deduplicateExperiences(profile?.experience ?? saved?.experience ?? []));
+    setSkills(profile?.skills ?? saved?.skills ?? []);
+    setKeywords(saved?.keywords ?? []);
+    setSalaryData({
+      ...initialSalaryData,
+      ...savedSalaryData,
+      min: profile ? profile.salary_min?.toString() ?? '' : savedSalaryData.min ?? '',
+      max: savedSalaryData.max ?? profile?.salary_max?.toString() ?? '',
+    });
+    setHydratedKey(storageKey);
   }, [isLoading, profile, storageKey, usuario]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingOriginalCV(true);
+    setSavedOriginalCV(null);
+
+    loadOriginalProfileCV(cvOwnerId)
+      .then((file) => {
+        if (!cancelled) {
+          setSavedOriginalCV(file);
+          setHasProcessedCV(Boolean(file));
+          try {
+            setHasProcessedCV(Boolean(file) || localStorage.getItem(`${storageKey}:cv-processed`) === '1');
+          } catch (error) {
+            console.error('No se pudo consultar el estado local de importación del CV:', error);
+          }
+        }
+      })
+      .catch((error) => {
+        console.error('No se pudo cargar el CV original guardado:', error);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingOriginalCV(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cvOwnerId, storageKey]);
+
+  const downloadOriginalCV = () => {
+    if (!savedOriginalCV) return;
+    const objectUrl = URL.createObjectURL(savedOriginalCV.blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = savedOriginalCV.name;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  };
 
   useEffect(() => {
     if (hydratedKey !== storageKey) return;
@@ -163,6 +270,100 @@ export default function PerfilMaestroPage() {
     }));
   };
 
+// Atrapa los datos de la IA y actualiza todos los estados de React a la vez
+  const handleDatosExtraidosIA = (datosIA: any) => {
+    setHasProcessedCV(true);
+    try {
+      localStorage.setItem(`${storageKey}:cv-processed`, '1');
+    } catch (error) {
+      console.error('No se pudo guardar el estado de importación del CV:', error);
+    }
+
+    if (datosIA.personalData) {
+      setPersonalData((previous) => ({
+        ...previous,
+        ...datosIA.personalData,
+        rut: datosIA.personalData.rut?.trim() || previous.rut,
+        teléfono: getNationalPhoneNumber(
+          datosIA.personalData.teléfono ?? previous.teléfono,
+          previous.codigoTeléfono,
+        ),
+        resumen: datosIA.personalData.resumen?.trim() || previous.resumen,
+      }));
+    }
+
+    if (datosIA.skills && Array.isArray(datosIA.skills)) {
+      setSkills(prev => Array.from(new Set([...prev, ...datosIA.skills])));
+    }
+
+    if (datosIA.keywords && Array.isArray(datosIA.keywords)) {
+      setKeywords(prev => Array.from(new Set([...prev, ...datosIA.keywords])));
+    }
+
+    if (datosIA.salaryData) {
+      setSalaryData(prev => ({ ...prev, ...datosIA.salaryData }));
+    }
+
+
+    const experienceEntries = Array.isArray(datosIA.experience)
+      ? datosIA.experience
+      : Array.isArray(datosIA.experiencia) ? datosIA.experiencia : [];
+    if (experienceEntries.length > 0) {
+      const nuevasExperiencias = experienceEntries
+        .filter((exp: any) => exp && typeof exp === 'object')
+        .map((exp: any): Experience => {
+          const endDate = exp.fecha_fin ?? exp.endDate ?? exp.end_date ?? '';
+          const isCurrent = exp.actual === true || exp.isCurrent === true || /presente|actualidad/i.test(String(endDate));
+          const stackTags = exp.habilidades ?? exp.stackTags ?? exp.technologies ?? [];
+          return {
+            id: crypto.randomUUID(),
+            role: exp.cargo || exp.role || exp.puesto || '',
+            company: exp.empresa || exp.company || exp.compania || '',
+            startDate: exp.fecha_inicio || exp.startDate || exp.start_date || '',
+            endDate: isCurrent ? 'Presente' : endDate,
+            isCurrent,
+            location: exp.ubicacion || exp.location || '',
+            employmentType: exp.tipo_jornada || exp.employmentType || '',
+            description: exp.descripcion || exp.description || exp.responsabilidades || '',
+            stackTags: Array.isArray(stackTags)
+              ? stackTags.filter((tag: unknown): tag is string => typeof tag === 'string')
+              : typeof stackTags === 'string' ? stackTags.split(',').map((tag: string) => tag.trim()).filter(Boolean) : [],
+          };
+        })
+        .filter((exp: Experience) => exp.role || exp.company);
+      const empresasImportadas = new Set(nuevasExperiencias.map((exp: Experience) => normalizeExperiencePart(exp.company)));
+      setExperience((previous) => {
+        const experienciasPrevias = previous.filter((exp: Experience) => (
+          !empresasImportadas.has(normalizeExperiencePart(exp.company))
+          || !isOnlyExperienceSectionNoise(exp.role)
+        ));
+        return deduplicateExperiences([...nuevasExperiencias, ...experienciasPrevias]);
+      });
+    }
+
+
+    const educationEntries = Array.isArray(datosIA.education)
+      ? datosIA.education
+      : Array.isArray(datosIA.educacion) ? datosIA.educacion : [];
+    if (educationEntries.length > 0) {
+      const nuevaEducacion = educationEntries.filter((edu: any) => edu && typeof edu === 'object').map((edu: any) => ({
+        id: crypto.randomUUID(),
+        institution: edu.institucion || edu.institution || '',
+        degree: edu.titulo || edu.degree || edu.grado || '',
+        startDate: edu.fecha_inicio || edu.startDate || edu.start_date || '',
+        endDate: edu.fecha_fin || edu.endDate || edu.end_date || '',
+        studying: edu.actual === true || edu.studying === true,
+        location: edu.ubicacion || edu.location || '',
+        studyMode: 'Presencial',
+        description: edu.descripcion || edu.description || 'Formación detectada automáticamente desde tu CV.',
+        tags: Array.isArray(edu.habilidades) ? edu.habilidades.filter((tag: unknown): tag is string => typeof tag === 'string') : [],
+      })).filter((edu: Education) => edu.institution || edu.degree);
+      setEducation(prev => [...prev, ...nuevaEducacion]);
+    }
+
+    setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+  };
+
   const handleEducationSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setEducation((current) => [{
@@ -182,8 +383,8 @@ export default function PerfilMaestroPage() {
 
   const handleExperienceSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setExperience((current) => [{
-      id: crypto.randomUUID(),
+    const updatedExperience: Experience = {
+      id: editingExperienceId ?? crypto.randomUUID(),
       role: experienceForm.role.trim(),
       company: experienceForm.company.trim(),
       startDate: experienceForm.startDate,
@@ -193,9 +394,31 @@ export default function PerfilMaestroPage() {
       stackTags: experienceForm.stackTags.split(',').map((tag) => tag.trim()).filter(Boolean),
       location: experienceForm.location.trim(),
       employmentType: experienceForm.employmentType,
-    }, ...current]);
+    };
+    setExperience((current) => deduplicateExperiences(
+      editingExperienceId
+        ? current.map((item) => item.id === editingExperienceId ? updatedExperience : item)
+        : [updatedExperience, ...current],
+    ));
     setExperienceForm(emptyExperienceForm);
+    setEditingExperienceId(null);
     setModal(null);
+  };
+
+  const openExperienceEditor = (experienceItem: Experience) => {
+    setEditingExperienceId(experienceItem.id);
+    setExperienceForm({
+      role: experienceItem.role,
+      company: experienceItem.company,
+      startDate: experienceItem.startDate,
+      endDate: experienceItem.isCurrent || experienceItem.endDate === 'Presente' ? '' : experienceItem.endDate,
+      isCurrent: experienceItem.isCurrent || experienceItem.endDate === 'Presente',
+      location: experienceItem.location ?? '',
+      employmentType: experienceItem.employmentType ?? 'Jornada completa',
+      description: experienceItem.description,
+      stackTags: experienceItem.stackTags.join(', '),
+    });
+    setModal('experience');
   };
 
   const toggleCatalogValue = (value: string) => {
@@ -214,16 +437,152 @@ export default function PerfilMaestroPage() {
     setCustomCatalogValue('');
   };
 
-  const saveProfile = () => {
-    localStorage.setItem(storageKey, JSON.stringify({
+  const saveProfile = async () => {
+    const perfilLocal = {
       personalData,
       education,
       experience,
       skills,
       keywords,
       salaryData,
-    }));
-    setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    };
+    localStorage.setItem(storageKey, JSON.stringify(perfilLocal));
+    setSaveError('');
+
+    if (!accessToken) {
+      setSaveError('Se guardó en este dispositivo, pero debes iniciar sesión para sincronizarlo.');
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const response = await fetch(`${API_URL}/auth/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          ...perfilLocal,
+          personalData: {
+            ...personalData,
+            teléfono: toInternationalPhoneNumber(personalData.teléfono, personalData.codigoTeléfono),
+          },
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.detail || 'No fue posible sincronizar el Perfil Maestro.');
+      }
+      setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    } catch (error) {
+      setSaveError(error instanceof Error
+        ? `Se guardó en este dispositivo, pero no se sincronizó: ${error.message}`
+        : 'Se guardó en este dispositivo, pero no se sincronizó con el servidor.');
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const requestClearProfileData = () => {
+    setModal('confirmClear');
+  };
+
+  const executeClearProfileData = async () => {
+    setIsClearingProfile(true);
+    setSaveError('');
+    const errors: string[] = [];
+    const clearedProfile = {
+      personalData: {
+        nombre: personalData.nombre,
+        rut: personalData.rut,
+        email: personalData.email,
+        teléfono: personalData.teléfono,
+        codigoTeléfono: personalData.codigoTeléfono,
+        // Limpiamos los campos adicionales
+        región: '',
+        comuna: '',
+        cargoObjetivo: '',
+        linkedin: '',
+        portafolio: '',
+        resumen: '',
+      },
+      education: [],
+      experience: [],
+      skills: [],
+      keywords: [],
+      salaryData: initialSalaryData,
+    };
+
+    setPersonalData(clearedProfile.personalData);
+    setEducation(clearedProfile.education);
+    setExperience(clearedProfile.experience);
+    setSkills(clearedProfile.skills);
+    setKeywords(clearedProfile.keywords);
+    setSalaryData(clearedProfile.salaryData);
+    setEducationForm(emptyEducationForm);
+    setExperienceForm(emptyExperienceForm);
+    setSavedAt('');
+
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(clearedProfile));
+      localStorage.removeItem(`altoquecv_cv:${cvOwnerId}`);
+    } catch (error) {
+      console.error('No se pudieron limpiar los datos locales del Perfil Maestro:', error);
+      errors.push('no se pudieron guardar o limpiar todos los datos locales');
+    }
+
+    try {
+      await deleteOriginalProfileCV(cvOwnerId);
+      setSavedOriginalCV(null);
+      setHasProcessedCV(false);
+      try {
+        localStorage.removeItem(`${storageKey}:cv-processed`);
+      } catch (error) {
+        console.error('No se pudo limpiar el estado local de importación del CV:', error);
+        errors.push('no se pudo limpiar el indicador local de CV importado');
+      }
+    } catch (error) {
+      console.error('No se pudo borrar el CV original guardado:', error);
+      errors.push('no se pudo eliminar la copia del CV de este navegador');
+    }
+
+    if (accessToken) {
+      try {
+        const response = await fetch(`${API_URL}/auth/profile`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            ...clearedProfile,
+            personalData: {
+              ...clearedProfile.personalData,
+              teléfono: toInternationalPhoneNumber(
+                clearedProfile.personalData.teléfono,
+                clearedProfile.personalData.codigoTeléfono,
+              ),
+            },
+          }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.detail || 'No fue posible sincronizar el borrado con el servidor.');
+        }
+        setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+      } catch (error) {
+        console.error('No se pudo sincronizar el borrado del Perfil Maestro:', error);
+        errors.push('el borrado quedó solo en este dispositivo y no se sincronizó con el servidor');
+      }
+    } else {
+      errors.push('el borrado quedó solo en este dispositivo porque no hay una sesión activa');
+    }
+
+    setSaveError(errors.length ? `Borrado parcial: ${errors.join('; ')}.` : '');
+    setShowDeletePanel(false);
+    setModal(null); // Cerramos el modal tras borrar
+    setIsClearingProfile(false);
   };
 
   const catalog = modal === 'skills' ? TECHNICAL_SKILL_CATEGORIES : PROFILE_KEYWORD_CATEGORIES;
@@ -233,6 +592,8 @@ export default function PerfilMaestroPage() {
     values: values.filter((value) => value.toLowerCase().includes(catalogSearch.trim().toLowerCase())),
   })).filter((entry) => entry.values.length > 0);
   const salaryRangeInvalid = Boolean(salaryData.min && salaryData.max && Number(salaryData.min) > Number(salaryData.max));
+  const phoneNumberInvalid = Boolean(personalData.teléfono) && personalData.teléfono.length !== 9;
+  const selectedRegion = CHILE_REGIONS.find((region) => region.name === personalData.región);
 
   return (
     <div className="flex flex-col lg:flex-row gap-8">
@@ -254,31 +615,150 @@ export default function PerfilMaestroPage() {
             </button>
           ))}
         </nav>
+        <div className="mt-5">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full justify-start border border-error/50 !bg-error !text-on-error hover:!bg-error/90"
+            onClick={() => setShowDeletePanel(true)}
+          >
+            <span className="flex items-center gap-2"><Trash2 size={16} /> Borrar datos del perfil</span>
+          </Button>
+          {showDeletePanel && (
+            <section className="mt-3 rounded-container border border-error/40 bg-error-container/10 p-4">
+              <h2 className="text-label-lg font-semibold text-error">Borrar contenido curricular</h2>
+              <p className="mt-2 text-body-sm text-on-surface-variant">
+                Se eliminarán educación, experiencia, habilidades, keywords, pretensiones salariales, resumen y la copia local del CV. Nombre, RUT, correo y teléfono se conservarán.
+              </p>
+              <div className="mt-4 flex flex-col gap-2">
+                <Button
+                  type="button"
+                  className="w-full !bg-error !text-on-error hover:!bg-error/90"
+                  onClick={requestClearProfileData}
+                >
+                  <span className="flex items-center gap-2"><Trash2 size={16} /> Continuar para borrar datos</span>
+                </Button>
+                <Button type="button" variant="secondary" className="w-full" onClick={() => setShowDeletePanel(false)}>
+                  Cancelar
+                </Button>
+              </div>
+            </section>
+          )}
+        </div>
       </aside>
 
       {/* Contenido Principal */}
       <div className="flex-1 flex flex-col gap-8 pb-20">
-        
+
+        {profileLoadError ? (
+          <p role="alert" className="rounded-container border border-error/40 bg-error-container/20 p-4 text-body-sm text-error">
+            No se pudo consultar el perfil en la base de datos: {profileLoadError} Los datos visibles pueden ser la copia guardada en este navegador. Inicia sesión nuevamente para cargar y sincronizar los datos.
+          </p>
+        ) : !isAuthLoading && !accessToken ? (
+          <p role="status" className="rounded-container border border-border bg-surface-container-low p-4 text-body-sm text-on-surface-variant">
+            Estás viendo los datos guardados en este navegador. Inicia sesión para consultar y sincronizar la base de datos.
+          </p>
+        ) : null}
+
+        <Card className="border border-border p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="rounded-lg bg-primary/10 p-2 text-primary"><FileText size={20} /></div>
+              <div className="min-w-0">
+                <h2 className="text-label-lg font-semibold text-on-surface">CV original guardado</h2>
+                {isLoadingOriginalCV ? (
+                  <p className="text-body-sm text-on-surface-variant">Buscando un archivo guardado...</p>
+                ) : savedOriginalCV ? (
+                  <p className="truncate text-body-sm text-on-surface-variant">
+                    {savedOriginalCV.name} · {formatFileSize(savedOriginalCV.size)} · guardado el {new Date(savedOriginalCV.savedAt).toLocaleDateString('es-CL')}
+                  </p>
+                ) : hasProcessedCV ? (
+                  <p className="text-body-sm text-on-surface-variant">CV importado. No se guardó una copia descargable en este navegador.</p>
+                ) : (
+                  <p className="text-body-sm text-on-surface-variant">Aún no has guardado un CV original en este navegador.</p>
+                )}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="shrink-0"
+              onClick={downloadOriginalCV}
+              disabled={!savedOriginalCV}
+            >
+              <span className="flex items-center gap-2"><Download size={16} /> Descargar PDF</span>
+            </Button>
+          </div>
+        </Card>
+
         {/* Sección: Datos Personales */}
         {activeTab === tabs[0] && (
-          <div>
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-headline-md text-on-surface">Datos Personales</h2>
-              <Badge variant="success">Completado</Badge>
-            </div>
+          <div className="flex flex-col gap-8">
+
+            {/* 🪄 Cargador inteligente de CV con IA */}
+            {isLoadingOriginalCV ? (
+              <Card className="p-5 text-body-sm text-on-surface-variant">Comprobando si ya importaste un CV...</Card>
+            ) : hasProcessedCV ? (
+              <Card className="border border-success/30 bg-success-container/10 p-5">
+                <div className="flex items-start gap-3">
+                  <FileText size={20} className="mt-0.5 shrink-0 text-success" />
+                  <div>
+                    <h2 className="text-label-lg font-semibold text-on-surface">CV ya importado</h2>
+                    <p className="mt-1 text-body-sm text-on-surface-variant">
+                      Para cargar otro CV, borra los datos de tu perfil.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <CargadorCV
+                ownerId={cvOwnerId}
+                onDataExtracted={handleDatosExtraidosIA}
+                onCVStored={setSavedOriginalCV}
+              />
+            )}
+
+            {/* Formulario manual original */}
+            <div>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-headline-md text-on-surface">Datos Personales</h2>
+                <Badge variant="success">Completado</Badge>
+              </div>
 
             <Card className="p-8">
               <div className="flex flex-col sm:flex-row gap-8 mb-8">
                 {/* Avatar */}
                 <div className="flex flex-col items-center sm:items-start">
                   <div className="w-24 h-24 rounded-full bg-surface-container-highest flex items-center justify-center overflow-hidden mb-4">
-                    <img 
-                      src="/professional_studio_headshot_of_a_chilean_professional_man_in_his_late_20s.png" 
-                      alt="Foto de perfil"
-                      className="w-full h-full object-cover"
-                    />
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt="Foto de perfil" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center bg-gray-400 text-white" role="img" aria-label="Avatar genérico">
+                        <UserRound size={56} strokeWidth={1.5} aria-hidden="true" />
+                      </span>
+                    )}
                   </div>
-                  <Button variant="secondary" className="text-label-sm">Cambiar foto</Button>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (!file) return;
+                      setAvatarError('');
+                      try {
+                        await updateAvatar(file);
+                      } catch (error) {
+                        setAvatarError(error instanceof Error ? error.message : 'No se pudo actualizar la foto.');
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="secondary" className="text-label-sm" onClick={() => avatarInputRef.current?.click()}>
+                    Cambiar foto
+                  </Button>
+                  {avatarError && <p role="alert" className="mt-2 max-w-40 text-center text-label-sm text-error">{avatarError}</p>}
                 </div>
 
                 {/* Nombre y RUT */}
@@ -297,10 +777,9 @@ export default function PerfilMaestroPage() {
                       <Input
                         value={personalData.rut}
                         onChange={(e) => handlePersonalDataChange('rut', e.target.value)}
-                        placeholder="18.456.789-K"
+                        placeholder="11.111.111-1"
                         className="flex-1"
                       />
-                      <Badge variant="success" className="flex items-center px-3">✓ Verificado</Badge>
                     </div>
                   </div>
                 </div>
@@ -318,7 +797,6 @@ export default function PerfilMaestroPage() {
                       placeholder="correo@example.com"
                       className="flex-1"
                     />
-                    <Badge variant="success" className="flex items-center px-3">✓ Verificado</Badge>
                   </div>
                 </div>
                 <div>
@@ -329,26 +807,36 @@ export default function PerfilMaestroPage() {
                     countryCode={personalData.codigoTeléfono}
                     onCountryCodeChange={(code) => handlePersonalDataChange('codigoTeléfono', code)}
                     placeholder="9 1234 5678"
+                    error={phoneNumberInvalid}
                   />
+                  {phoneNumberInvalid && <p className="mt-1 text-label-sm text-error">Ingresa los 9 dígitos nacionales, sin incluir el código de país.</p>}
                 </div>
               </div>
 
               {/* Región y Comuna */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-label-md font-semibold mb-2 text-on-surface">Región</label>
-                  <Input
+                  <label htmlFor="profile-region" className="block text-label-md font-semibold mb-2 text-on-surface">Región</label>
+                  <SearchableSelect
+                    id="profile-region"
                     value={personalData.región}
-                    onChange={(e) => handlePersonalDataChange('región', e.target.value)}
-                    placeholder="Región Metropolitana"
+                    options={CHILE_REGIONS.map((region) => region.name)}
+                    onChange={(region) => {
+                      handlePersonalDataChange('región', region);
+                      handlePersonalDataChange('comuna', '');
+                    }}
+                    placeholder="Busca o selecciona una región"
                   />
                 </div>
                 <div>
-                  <label className="block text-label-md font-semibold mb-2 text-on-surface">Comuna</label>
-                  <Input
+                  <label htmlFor="profile-commune" className="block text-label-md font-semibold mb-2 text-on-surface">Comuna</label>
+                  <SearchableSelect
+                    id="profile-commune"
                     value={personalData.comuna}
-                    onChange={(e) => handlePersonalDataChange('comuna', e.target.value)}
-                    placeholder="Santiago"
+                    options={selectedRegion?.communes ?? []}
+                    onChange={(comuna) => handlePersonalDataChange('comuna', comuna)}
+                    placeholder={selectedRegion ? "Busca o selecciona una comuna" : "Primero selecciona una región"}
+                    disabled={!selectedRegion}
                   />
                 </div>
               </div>
@@ -373,6 +861,7 @@ export default function PerfilMaestroPage() {
                 </div>
               </div>
             </Card>
+            </div>
           </div>
         )}
 
@@ -413,7 +902,18 @@ export default function PerfilMaestroPage() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-headline-md text-on-surface">Experiencia Laboral</h3>
-              <Button type="button" variant="ghost" className="text-primary" onClick={() => setModal('experience')}>+ Añadir Experiencia</Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="text-primary"
+                onClick={() => {
+                  setEditingExperienceId(null);
+                  setExperienceForm(emptyExperienceForm);
+                  setModal('experience');
+                }}
+              >
+                + Añadir Experiencia
+              </Button>
             </div>
             <div className="relative border-l-2 border-surface-container-highest ml-4 pl-8 flex flex-col gap-8">
               {experience.map((exp) => (
@@ -440,6 +940,7 @@ export default function PerfilMaestroPage() {
                       ))}
                     </div>
                     <div className="mt-3 flex justify-end">
+                      <button type="button" onClick={() => openExperienceEditor(exp)} aria-label={`Editar experiencia ${exp.role}`} className="p-2 rounded-button text-on-surface-variant hover:bg-primary/10 hover:text-primary"><Pencil size={17} /></button>
                       <button type="button" onClick={() => setExperience((current) => current.filter((item) => item.id !== exp.id))} aria-label={`Eliminar experiencia ${exp.role}`} className="p-2 rounded-button text-on-surface-variant hover:bg-error-container/20 hover:text-error"><Trash2 size={17} /></button>
                     </div>
                   </Card>
@@ -519,8 +1020,10 @@ export default function PerfilMaestroPage() {
 
         {/* Acciones Finales */}
         <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-4 mt-4 pt-6 border-t border-border">
-          <p aria-live="polite" className="text-label-sm text-on-surface-variant">{savedAt ? `Guardado a las ${savedAt}` : 'Los cambios se guardan automáticamente en este dispositivo.'}</p>
-          <Button type="button" variant="primary" disabled={salaryRangeInvalid} onClick={saveProfile}>Guardar Cambios</Button>
+          <p aria-live="polite" className={`text-label-sm ${saveError ? 'text-error' : 'text-on-surface-variant'}`}>{saveError || (savedAt ? `Sincronizado a las ${savedAt}` : 'Los cambios se guardan automáticamente en este dispositivo.')}</p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Button type="button" variant="primary" disabled={salaryRangeInvalid || phoneNumberInvalid || isSavingProfile} onClick={saveProfile}>{isSavingProfile ? 'Sincronizando…' : 'Guardar Cambios'}</Button>
+          </div>
         </div>
       </div>
 
@@ -530,13 +1033,13 @@ export default function PerfilMaestroPage() {
             <header className="flex items-start justify-between gap-4 border-b border-border bg-surface-container-low px-6 py-5">
               <div>
                 <h2 id="profile-modal-title" className="text-headline-sm text-on-surface">
-                  {modal === 'education' ? 'Añadir educación' : modal === 'experience' ? 'Añadir experiencia laboral' : modal === 'skills' ? 'Agregar habilidades técnicas' : 'Agregar keywords profesionales'}
+                  {modal === 'education' ? 'Añadir educación' : modal === 'experience' ? editingExperienceId ? 'Editar experiencia laboral' : 'Añadir experiencia laboral' : modal === 'skills' ? 'Agregar habilidades técnicas' : 'Agregar keywords profesionales'}
                 </h2>
                 <p className="mt-1 text-body-sm text-on-surface-variant">
                   {modal === 'education' ? 'Completa los datos de tu formación académica.' : modal === 'experience' ? 'Registra un cargo y sus principales responsabilidades.' : 'Busca en el catálogo o agrega un término propio.'}
                 </p>
               </div>
-              <button type="button" onClick={() => setModal(null)} aria-label="Cerrar" className="rounded-button p-2 text-on-surface-variant hover:bg-surface-container"><X size={20} /></button>
+              <button type="button" onClick={() => { setModal(null); setEditingExperienceId(null); }} aria-label="Cerrar" className="rounded-button p-2 text-on-surface-variant hover:bg-surface-container"><X size={20} /></button>
             </header>
 
             {modal === 'education' && (
@@ -569,7 +1072,7 @@ export default function PerfilMaestroPage() {
                   <label className="sm:col-span-2 text-label-md text-on-surface">Responsabilidades y logros<textarea required rows={4} value={experienceForm.description} onChange={(e) => setExperienceForm((current) => ({ ...current, description: e.target.value }))} placeholder="Describe tu aporte e incluye resultados cuando sea posible." className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-body-md text-on-surface focus:border-primary focus:outline-none" /></label>
                   <label className="sm:col-span-2 text-label-md text-on-surface">Tecnologías y habilidades, separadas por coma<Input value={experienceForm.stackTags} onChange={(e) => setExperienceForm((current) => ({ ...current, stackTags: e.target.value }))} placeholder="React, TypeScript, AWS" /></label>
                 </div>
-                <div className="flex justify-end gap-3 border-t border-border bg-surface-container-low p-5"><Button type="button" variant="secondary" onClick={() => setModal(null)}>Cancelar</Button><Button type="submit">Agregar experiencia</Button></div>
+                <div className="flex justify-end gap-3 border-t border-border bg-surface-container-low p-5"><Button type="button" variant="secondary" onClick={() => { setModal(null); setEditingExperienceId(null); }}>Cancelar</Button><Button type="submit">{editingExperienceId ? 'Guardar cambios' : 'Agregar experiencia'}</Button></div>
               </form>
             )}
 
@@ -594,7 +1097,8 @@ export default function PerfilMaestroPage() {
                             <label key={value} className="flex cursor-pointer items-center gap-3 rounded-input border border-border px-3 py-2.5 text-body-sm text-on-surface hover:bg-surface-container-low">
                               <input type="checkbox" checked={selectedCatalogValues.includes(value)} onChange={() => toggleCatalogValue(value)} className="accent-primary" />{value}
                             </label>
-                          ))}
+                          ))
+                          }
                         </div>
                       </section>
                     ))}
@@ -604,6 +1108,25 @@ export default function PerfilMaestroPage() {
                 <div className="flex justify-end gap-3 border-t border-border bg-surface-container-low p-5"><Button type="button" variant="secondary" onClick={() => setModal(null)}>Cerrar</Button><Button type="button" onClick={() => setModal(null)}>Listo ({selectedCatalogValues.length})</Button></div>
               </div>
             )}
+            {modal === 'confirmClear' && (
+              <div className="flex flex-col p-6">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-error-container/30 text-error">
+                  <Trash2 size={24} />
+                </div>
+                <h3 className="mb-2 text-center text-headline-sm text-on-surface">¿Borrar información del perfil?</h3>
+                <p className="mb-6 text-center text-body-md text-on-surface-variant">
+                  Se eliminarán educación, experiencia laboral, habilidades, keywords, pretensiones salariales, resumen profesional, campos complementarios y la copia local del CV. <br/><br/>
+                  <span className="font-semibold text-on-surface">Nombre, RUT, correo y teléfono se conservarán. El borrado también se sincronizará con el servidor.</span>
+                </p>
+                <div className="flex justify-center gap-3">
+                  <Button type="button" variant="secondary" onClick={() => setModal(null)}>Cancelar</Button>
+                  <Button type="button" onClick={executeClearProfileData} disabled={isClearingProfile} className="!bg-error !text-on-error hover:!bg-error/90">
+                    {isClearingProfile ? 'Borrando…' : 'Sí, borrar datos'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
           </section>
         </div>
       )}

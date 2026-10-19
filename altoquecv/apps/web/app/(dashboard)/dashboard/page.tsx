@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/hooks/use-auth';
 import { usePostulaciones } from '@/hooks/use-postulaciones';
 import { Briefcase, CalendarCheck, Target, Search, FileText, BarChart } from 'lucide-react';
+import Link from 'next/link';
 
 export default function DashboardPage() {
   const { usuario } = useAuth();
@@ -63,10 +64,10 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-headline-md text-on-surface mb-4">Acciones rápidas</h2>
         <div className="flex flex-wrap gap-4">
-          <Button variant="primary" className="gap-2">
+          <Link href="/ofertas" className="inline-flex items-center justify-center gap-2 rounded-button bg-primary px-4 py-2 text-label-md text-on-primary transition-colors hover:bg-primary-container hover:text-on-primary-container">
             <Search size={18} />
             Buscar ofertas
-          </Button>
+          </Link>
           <Button variant="secondary" className="gap-2">
             <FileText size={18} />
             Revisar CV

@@ -1,4 +1,5 @@
 import React from "react";
+import { UserRound } from "lucide-react";
 
 interface AvatarProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   size?: "sm" | "md" | "lg";
@@ -16,8 +17,8 @@ export function Avatar({ className = "", size = "md", src, alt = "Avatar", ...pr
       {src ? (
         <img src={src} alt={alt} className="h-full w-full object-cover" {...props} />
       ) : (
-        <span className="flex h-full w-full items-center justify-center text-label-md text-on-surface-variant">
-          {alt.charAt(0).toUpperCase()}
+        <span role="img" aria-label={alt} className="flex h-full w-full items-center justify-center bg-gray-400 text-white">
+          <UserRound size="58%" strokeWidth={1.5} aria-hidden="true" />
         </span>
       )}
     </div>

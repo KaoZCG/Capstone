@@ -2,12 +2,6 @@ import { PortalIntegracion, AutocompleteConfig } from '@/types';
 
 export const portalesMock: PortalIntegracion[] = [
   {
-    id: 'laborum',
-    nombre: 'Laborum',
-    conectado: false,
-    estadoSync: 'inactivo',
-  },
-  {
     id: 'trabajando',
     nombre: 'Trabajando.com',
     conectado: false,

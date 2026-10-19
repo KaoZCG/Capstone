@@ -23,6 +23,8 @@ export interface CVEducacion {
 export interface CV {
   id: string;
   nombre: string;
+  cargoObjetivo?: string;
+  habilidadesPersonalizadas?: boolean;
   email: string;
   teléfono: string;
   resumen?: string;

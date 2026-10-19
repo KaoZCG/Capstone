@@ -4,6 +4,7 @@ export interface OfertaDetectada {
   ubicacion: string;
   portal: 'trabajando' | 'laborum' | 'linkedin' | 'chile-trabajos' | 'computrabajo';
   url: string;
+  descripcion?: string;
 }
 
 export interface CompatibilidadWidget {
@@ -12,7 +13,9 @@ export interface CompatibilidadWidget {
     skillsTecnicos: number; 
     pretensionSalarial: number; 
     nivelExperiencia: number; 
+    formacionAcademica?: number;
   };
+  mensaje?: string;
   mapeoCampos: {
     total: number;
     completados: number;

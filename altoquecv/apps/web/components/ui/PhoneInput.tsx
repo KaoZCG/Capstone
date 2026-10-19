@@ -1,6 +1,7 @@
 import React from "react";
 import { Input } from "./Input";
 import { Select } from "./Select";
+import { getNationalPhoneNumber } from "@/lib/auth";
 
 interface PhoneInputProps {
   value?: string;
@@ -43,9 +44,11 @@ export const PhoneInput = React.forwardRef<HTMLInputElement, PhoneInputProps>(
         <Input
           ref={ref}
           type="tel"
+          inputMode="numeric"
+          maxLength={18}
           placeholder={placeholder}
           value={value}
-          onChange={(e) => onChange?.(e.target.value)}
+          onChange={(e) => onChange?.(getNationalPhoneNumber(e.target.value, countryCode))}
           error={error}
           valid={valid}
           className="flex-1"

@@ -71,6 +71,20 @@ export function normalizeChileanPhone(value: string): string {
   return value.trim();
 }
 
+export function getNationalPhoneNumber(value: string, countryCode = '+56'): string {
+  const digits = value.replace(/\D/g, '');
+  const dialCode = countryCode.replace(/\D/g, '');
+  const nationalNumber = dialCode && digits.startsWith(dialCode)
+    ? digits.slice(dialCode.length)
+    : digits;
+  return nationalNumber.slice(0, 9);
+}
+
+export function toInternationalPhoneNumber(value: string, countryCode = '+56'): string {
+  const nationalNumber = getNationalPhoneNumber(value, countryCode);
+  return nationalNumber ? `${countryCode}${nationalNumber}` : '';
+}
+
 export function isValidChileanPhone(value: string): boolean {
   return /^\+569\d{8}$/.test(normalizeChileanPhone(value));
 }

@@ -25,6 +25,7 @@ export function useProfile() {
   const { accessToken } = useAuth();
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -32,20 +33,27 @@ export function useProfile() {
     async function loadProfile() {
       if (!accessToken) {
         setProfile(null);
+        setError('');
         setIsLoading(false);
         return;
       }
 
       setIsLoading(true);
+      setError('');
       try {
         const response = await fetch(`${API_URL}/auth/profile`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!response.ok) throw new Error('No fue posible cargar el perfil');
-        const data = await response.json();
-        if (!cancelled) setProfile(data);
-      } catch {
-        if (!cancelled) setProfile(null);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.detail || 'No fue posible consultar el perfil en la base de datos.');
+        }
+        if (!cancelled) setProfile(body);
+      } catch (loadError) {
+        if (!cancelled) {
+          setProfile(null);
+          setError(loadError instanceof Error ? loadError.message : 'No fue posible consultar el perfil en la base de datos.');
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -57,5 +65,5 @@ export function useProfile() {
     };
   }, [accessToken]);
 
-  return { profile, isLoading };
+  return { profile, isLoading, error };
 }

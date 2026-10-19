@@ -40,7 +40,7 @@ export default function RecuperarContrasenaPage() {
             <div className="w-16 h-16 bg-success-container text-success rounded-full flex items-center justify-center mx-auto mb-6">
               <Mail size={32} />
             </div>
-            <h2 className="text-2xl font-bold text-on-surface mb-2">Enlace enviado</h2>
+            <h2 className="text-2xl font-bold text-on-surface mb-2">Solicitud recibida</h2>
             <p className="text-sm text-on-surface-variant mb-8">
               <span className="block mb-2">{successMessage}</span>
               Revisa la bandeja de entrada y spam de <strong>{email}</strong>.

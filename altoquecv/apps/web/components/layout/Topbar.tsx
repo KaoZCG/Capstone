@@ -5,10 +5,15 @@ import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { Avatar } from "@/components/ui/Avatar";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from '@/hooks/use-auth';
+import { useProfile } from '@/hooks/use-profile';
+import { useProfileAvatar } from '@/hooks/use-profile-avatar';
 
 export function Topbar() {
   const { usuario } = useAuth();
+  const { profile } = useProfile();
   const displayName = usuario?.nombre ?? 'Usuario';
+  const avatarOwnerId = profile?.user_id ?? usuario?.id ?? usuario?.email ?? 'local';
+  const { avatarUrl } = useProfileAvatar(avatarOwnerId);
 
   return (
     <header className="sticky top-0 z-10 h-16 bg-surface-container-lowest border-b border-border flex items-center justify-between px-8">
@@ -29,7 +34,7 @@ export function Topbar() {
             <p className="text-label-md text-on-surface">{displayName}</p>
             <p className="text-label-sm text-on-surface-variant">Candidato Pro</p>
           </div>
-          <Avatar src="professional_studio_headshot_of_a_chilean_professional_man_in_his_late_20s.png" alt={displayName} size="sm" />
+          <Avatar src={avatarUrl || undefined} alt={displayName} size="sm" />
         </div>
       </div>
     </header>

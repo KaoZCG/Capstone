@@ -507,7 +507,10 @@ async def register(payload: PasswordConfirmationRequest, service: SupabaseAuthSe
     except AuthServiceError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except httpx.RequestError as error:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Error conectando con Supabase.") from error
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No fue posible conectar con Supabase. Verifica la URL y la conectividad del backend.",
+        ) from error
 
 @router.post("/login", response_model=AuthResponse)
 async def login(payload: LoginRequest, service: SupabaseAuthService = Depends(get_auth_service)) -> AuthResponse:

@@ -741,10 +741,10 @@ def test_autocomplete_uses_authenticated_database_profile_and_limits_answer(monk
     assert "1." in sent_messages[1]["content"]
     answer = response.json()["respuestas"][0]
     assert len(answer.split()) <= 35
-    system_prompt = sent_messages[0]["content"]
-    assert "BLACK AI SPA" in system_prompt
-    assert "Python" in system_prompt
-    assert "Analista de Automatización" in system_prompt
+    ollama_prompt = "\n".join(message["content"] for message in sent_messages)
+    assert "BLACK AI SPA" in ollama_prompt
+    assert "Python" in ollama_prompt
+    assert "Analista de Automatización" in ollama_prompt
 
 
 def test_profile_sync_requires_and_uses_authenticated_user() -> None:

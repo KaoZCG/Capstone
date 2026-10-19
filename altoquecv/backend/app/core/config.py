@@ -33,7 +33,12 @@ class Settings(BaseSettings):
     # Clave privada necesaria para consultar metadata de usuarios y detectar RUT duplicados.
     supabase_service_role_key: str | None = None
     # Orígenes de navegador autorizados por CORS.
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "https://www.laborum.cl", "https://www.trabajando.cl"]
+
+    # Ollama corre fuera de FastAPI. En Docker, define OLLAMA_BASE_URL=http://host.docker.internal:11434.
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "llama3.2"
+    ollama_timeout_seconds: float = Field(default=45.0, gt=0, le=900)
 
     # Configura la carga automática desde `.env` y rechaza errores por variables extra.
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 # `FastAPI` es el framework que crea la API HTTP y genera OpenAPI automáticamente.
 from fastapi import FastAPI
+import httpx
 # `CORSMiddleware` permite que el frontend en otro origen, como localhost:3000,
 # pueda realizar peticiones al backend.
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,10 +37,10 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 # CORS controla qué frontend puede llamar a esta API desde el navegador.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origin_regex=".*",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "apikey"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 # El prefijo agrupa todas las rutas bajo `/api/v1`, facilitando versionar la API.
 app.include_router(router, prefix=settings.api_prefix)
@@ -49,3 +50,31 @@ app.include_router(router, prefix=settings.api_prefix)
 async def health() -> dict[str, str]:
     """Devuelve una respuesta mínima para comprobar que el servidor está vivo."""
     return {"status": "ok"}
+
+
+@app.get("/health/ai", tags=["Sistema"])
+async def ai_health() -> dict[str, str | bool]:
+    """Comprueba desde el proceso FastAPI si Ollama y el modelo configurado responden."""
+    base_url = settings.ollama_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{base_url}/api/tags")
+            response.raise_for_status()
+        models = response.json().get("models", [])
+        model_available = any(
+            model.get("name", "").split(":", 1)[0] == settings.ollama_model.split(":", 1)[0]
+            for model in models
+        )
+        return {
+            "status": "ok" if model_available else "degraded",
+            "ollama_available": True,
+            "model": settings.ollama_model,
+            "model_available": model_available,
+        }
+    except (httpx.HTTPError, ValueError):
+        return {
+            "status": "unavailable",
+            "ollama_available": False,
+            "model": settings.ollama_model,
+            "model_available": False,
+        }

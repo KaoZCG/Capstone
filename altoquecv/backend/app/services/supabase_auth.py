@@ -13,7 +13,13 @@ import httpx
 # Configuración con URL y clave pública del proyecto Supabase.
 from app.core.config import Settings
 # Esquemas de entrada y salida que mantienen un contrato estable para el frontend.
-from app.schemas.auth import AuthResponse, CurrentUserResponse, LoginRequest, PasswordConfirmationRequest
+from app.schemas.auth import (
+    AuthResponse,
+    CurrentUserResponse,
+    LoginRequest,
+    PasswordConfirmationRequest,
+    RefreshTokenRequest,
+)
 from app.schemas.data import (
     OfertaLaborumInput,
     OfertaLaborumResponse,
@@ -140,13 +146,16 @@ def _match_laborum_offer(offer: dict[str, Any], profile: ProfileResponse | None)
 
 def _profile_experience_from_row(row: dict[str, Any]) -> dict[str, Any]:
     description, stack_tags = _split_experience_stack_tags(row.get("descripcion_logros"))
+    is_current = bool(row.get("es_trabajo_actual", False))
     return {
         "id": row["id"],
-        "role": row["titulo_cargo"],
-        "company": row["empresa"],
-        "startDate": row["fecha_ingreso"],
-        "endDate": row["fecha_salida"] or "Presente",
-        "isCurrent": row.get("es_trabajo_actual", False),
+        "role": row.get("titulo_cargo") or "",
+        "company": row.get("empresa") or "",
+        "startDate": row.get("fecha_ingreso_texto") or row.get("fecha_ingreso") or "",
+        "endDate": row.get("fecha_salida_texto") or row.get("fecha_salida") or ("Presente" if is_current else ""),
+        "isCurrent": is_current,
+        "location": row.get("ubicacion") or "",
+        "employmentType": row.get("tipo_jornada") or "",
         "description": description,
         "stackTags": stack_tags,
     }
@@ -380,6 +389,18 @@ class SupabaseAuthService:
             pass
         return auth_response
 
+    async def refresh_session(self, payload: RefreshTokenRequest) -> AuthResponse:
+        """Renueva una sesión Supabase y devuelve el nuevo par de tokens."""
+        response = await self._client.post(
+            f"{self._base_url}/auth/v1/token?grant_type=refresh_token",
+            headers=self._headers,
+            json={"refresh_token": payload.refresh_token.get_secret_value()},
+        )
+        auth_response = self._parse_response(response, registration=False)
+        if not auth_response.access_token or not auth_response.refresh_token:
+            raise AuthServiceError("Supabase no devolvió una sesión renovada", status_code=502)
+        return auth_response
+
     async def _ensure_active_account(self, user_id: str) -> None:
         """Exige que exista una cuenta pública activa además del usuario Auth."""
         rows = await self._rest_get(
@@ -493,6 +514,16 @@ class SupabaseAuthService:
             profile_update["rut_identificador"] = personal["rut"]
         if "teléfono" in personal:
             profile_update["telefono_movil"] = personal["teléfono"] or None
+        for frontend_field, database_field in {
+            "cargoObjetivo": "cargo_objetivo",
+            "región": "region",
+            "comuna": "comuna",
+            "linkedin": "url_linkedin",
+            "portafolio": "url_portafolio",
+            "resumen": "resumen_profesional",
+        }.items():
+            if frontend_field in personal:
+                profile_update[database_field] = personal[frontend_field] or None
         if "min" in payload.salaryData:
             salary = payload.salaryData["min"]
             if salary in (None, ""):
@@ -520,10 +551,16 @@ class SupabaseAuthService:
             if not institution and not degree:
                 continue
             education.append({
+                "id": item.get("id"),
                 "institution": institution,
                 "degree": degree,
                 "startDate": item.get("startDate") or item.get("fecha_inicio"),
                 "endDate": item.get("endDate") or item.get("fecha_fin"),
+                "location": item.get("location") or item.get("ubicacion") or "",
+                "studyMode": item.get("studyMode") or item.get("modalidad") or "",
+                "description": item.get("description") or item.get("descripcion") or "",
+                "tags": item.get("tags") or item.get("habilidades") or item.get("especialidades") or [],
+                "studying": item.get("studying") or item.get("actual") or False,
             })
         await self._replace_profile_rows("formacion_academica", profile_id, education)
 
@@ -539,6 +576,8 @@ class SupabaseAuthService:
                 "startDate": item.get("startDate") or item.get("fecha_inicio"),
                 "endDate": item.get("endDate") or item.get("fecha_fin"),
                 "isCurrent": item.get("isCurrent") or item.get("actual") or False,
+                "location": item.get("location") or item.get("ubicacion") or "",
+                "employmentType": item.get("employmentType") or item.get("tipo_jornada") or "",
                 "description": item.get("description") or item.get("descripcion") or item.get("responsabilidades") or "",
                 "stackTags": item.get("stackTags") or item.get("habilidades") or item.get("technologies") or [],
             })
@@ -566,38 +605,118 @@ class SupabaseAuthService:
             if response.is_error:
                 raise AuthServiceError(self._database_error(response, "No fue posible guardar las habilidades"), 502)
 
+    async def clear_profile_curricular_data(self, user_id: str) -> None:
+        """Elimina los datos curriculares del perfil sin modificar identidad ni credenciales."""
+        self._require_admin_headers()
+        profile_rows = await self._rest_get(
+            "perfiles_candidatos",
+            {"select": "id", "usuario_id": f"eq.{user_id}"},
+        )
+        if not profile_rows:
+            raise AuthServiceError("Perfil del usuario no encontrado", status_code=404)
+        profile_id = str(profile_rows[0]["id"])
+
+        response = await self._client.patch(
+            f"{self._base_url}/rest/v1/perfiles_candidatos",
+            headers={**self._admin_headers, "Prefer": "return=minimal"},
+            params={"id": f"eq.{profile_id}"},
+            json={"expectativa_salarial_liquida": None},
+        )
+        if response.is_error:
+            raise AuthServiceError(self._database_error(response, "No fue posible limpiar la expectativa salarial"), 502)
+
+        for table in ("formacion_academica", "trayectoria_laboral", "competencias_tecnicas"):
+            await self._delete_profile_rows(table, {"perfil_id": f"eq.{profile_id}"})
+
     async def _replace_profile_rows(self, table: str, profile_id: str, items: list[dict[str, Any]]) -> None:
+        is_education = table == "formacion_academica"
+        identity_columns = (
+            ("institucion", "grado_obtenido")
+            if is_education
+            else ("empresa", "titulo_cargo")
+        )
         current_rows = await self._rest_get(
             table,
-            {"select": "id", "perfil_id": f"eq.{profile_id}"},
+            {
+                "select": f"id,{','.join(identity_columns)}",
+                "perfil_id": f"eq.{profile_id}",
+            },
         )
         current_ids = {str(row["id"]) for row in current_rows if row.get("id")}
+        rows_by_identity: dict[tuple[str, str], list[str]] = {}
+        for current_row in current_rows:
+            row_id = str(current_row.get("id") or "")
+            identity = tuple(_normalize_match_text(current_row.get(column)) for column in identity_columns)
+            if row_id and any(identity):
+                rows_by_identity.setdefault(identity, []).append(row_id)
+
         rows: list[dict[str, Any]] = []
+        matched_ids: set[str] = set()
         for item in items:
             supplied_id = str(item.get("id", ""))
-            row_id = supplied_id if supplied_id in current_ids else str(uuid4())
-            if table == "formacion_academica":
+            identity_values = (
+                (item.get("institution") or item.get("institucion"), item.get("degree") or item.get("titulo"))
+                if is_education
+                else (item.get("company") or item.get("empresa"), item.get("role") or item.get("cargo"))
+            )
+            identity = tuple(_normalize_match_text(value) for value in identity_values)
+            row_id = supplied_id if supplied_id in current_ids and supplied_id not in matched_ids else ""
+            if not row_id and any(identity):
+                row_id = next(
+                    (
+                        candidate_id
+                        for candidate_id in rows_by_identity.get(identity, [])
+                        if candidate_id not in matched_ids
+                    ),
+                    "",
+                )
+            if row_id:
+                matched_ids.add(row_id)
+            else:
+                row_id = str(uuid4())
+
+            if is_education:
+                institution = str(item.get("institution") or item.get("institucion") or "").strip() or None
+                degree = str(item.get("degree") or item.get("titulo") or "").strip() or None
                 rows.append({
                     "id": row_id,
                     "perfil_id": profile_id,
-                    "institucion": item["institution"],
-                    "grado_obtenido": item["degree"],
-                    "anio_ingreso": self._year(item["startDate"]),
-                    "anio_egreso": self._year(item["endDate"]),
+                    "institucion": institution,
+                    "grado_obtenido": degree,
+                    "anio_ingreso": self._year(item.get("startDate") or item.get("fecha_inicio")),
+                    "anio_egreso": self._year(item.get("endDate") or item.get("fecha_fin")),
+                    "fecha_inicio_texto": str(item.get("startDate") or item.get("fecha_inicio") or "").strip() or None,
+                    "fecha_termino_texto": str(item.get("endDate") or item.get("fecha_fin") or "").strip() or None,
+                    "ubicacion": str(item.get("location") or item.get("ubicacion") or "").strip() or None,
+                    "modalidad": str(item.get("studyMode") or item.get("modalidad") or "").strip() or None,
+                    "descripcion": str(item.get("description") or item.get("descripcion") or "").strip() or None,
+                    "especialidades": _normalize_stack_tags(
+                        item.get("tags") or item.get("habilidades") or item.get("especialidades")
+                    ),
+                    "es_estudio_actual": bool(item.get("studying") or item.get("actual")),
                 })
             else:
-                is_current = bool(item["isCurrent"]) or str(item["endDate"] or "").lower() in {"presente", "actualidad"}
+                company = str(item.get("company") or item.get("empresa") or "").strip() or None
+                role = str(item.get("role") or item.get("cargo") or "").strip() or None
+                end_date = item.get("endDate") or item.get("fecha_fin")
+                is_current = bool(item.get("isCurrent") or item.get("actual")) or str(end_date or "").lower() in {"presente", "actualidad"}
+                description = _join_experience_stack_tags(
+                    item.get("description") or item.get("descripcion") or item.get("responsabilidades"),
+                    item.get("stackTags") or item.get("habilidades") or item.get("technologies"),
+                )
                 rows.append({
                     "id": row_id,
                     "perfil_id": profile_id,
-                    "empresa": item["company"],
-                    "titulo_cargo": item["role"],
-                    "descripcion_logros": _join_experience_stack_tags(
-                        item["description"], item.get("stackTags")
-                    ),
-                    "fecha_ingreso": self._date(item["startDate"]),
-                    "fecha_salida": None if is_current else self._date(item["endDate"]),
+                    "empresa": company,
+                    "titulo_cargo": role,
+                    "descripcion_logros": description or None,
+                    "fecha_ingreso": self._date(item.get("startDate") or item.get("fecha_inicio")),
+                    "fecha_salida": None if is_current else self._date(end_date),
                     "es_trabajo_actual": is_current,
+                    "fecha_ingreso_texto": str(item.get("startDate") or item.get("fecha_inicio") or "").strip() or None,
+                    "fecha_salida_texto": str(end_date or "").strip() or None,
+                    "ubicacion": str(item.get("location") or item.get("ubicacion") or "").strip() or None,
+                    "tipo_jornada": str(item.get("employmentType") or item.get("tipo_jornada") or "").strip() or None,
                 })
 
         if rows:
@@ -610,13 +729,47 @@ class SupabaseAuthService:
             if response.is_error:
                 raise AuthServiceError(self._database_error(response, f"No fue posible guardar {table}"), 502)
 
-        retained_ids = {str(row["id"]) for row in rows}
-        stale_ids = current_ids - retained_ids
+        stale_ids = current_ids - matched_ids
         if stale_ids:
-            await self._delete_profile_rows(table, {
-                "perfil_id": f"eq.{profile_id}",
-                "id": f"in.({','.join(stale_ids)})",
-            })
+            empty_values = (
+                {
+                    "institucion": None,
+                    "grado_obtenido": None,
+                    "anio_ingreso": None,
+                    "anio_egreso": None,
+                    "fecha_inicio_texto": None,
+                    "fecha_termino_texto": None,
+                    "ubicacion": None,
+                    "modalidad": None,
+                    "descripcion": None,
+                    "especialidades": [],
+                    "es_estudio_actual": False,
+                }
+                if is_education
+                else {
+                    "empresa": None,
+                    "titulo_cargo": None,
+                    "descripcion_logros": None,
+                    "fecha_ingreso": None,
+                    "fecha_salida": None,
+                    "es_trabajo_actual": None,
+                    "fecha_ingreso_texto": None,
+                    "fecha_salida_texto": None,
+                    "ubicacion": None,
+                    "tipo_jornada": None,
+                }
+            )
+            response = await self._client.patch(
+                f"{self._base_url}/rest/v1/{table}",
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={
+                    "perfil_id": f"eq.{profile_id}",
+                    "id": f"in.({','.join(sorted(stale_ids))})",
+                },
+                json=empty_values,
+            )
+            if response.is_error:
+                raise AuthServiceError(self._database_error(response, f"No fue posible limpiar {table}"), 502)
 
     async def _delete_profile_rows(self, table: str, params: dict[str, str]) -> None:
         response = await self._client.delete(
@@ -668,7 +821,7 @@ class SupabaseAuthService:
         profile_rows = await self._rest_get(
             "perfiles_candidatos",
             {
-                "select": "id,rut_identificador,nombres,apellidos,telefono_movil,expectativa_salarial_liquida",
+                "select": "id,rut_identificador,nombres,apellidos,telefono_movil,expectativa_salarial_liquida,cargo_objetivo,region,comuna,url_linkedin,url_portafolio,resumen_profesional",
                 "usuario_id": f"eq.{user_id}",
             },
         )
@@ -679,14 +832,14 @@ class SupabaseAuthService:
         education_rows = await self._rest_get(
             "formacion_academica",
             {
-                "select": "id,institucion,grado_obtenido,anio_ingreso,anio_egreso",
+                "select": "id,institucion,grado_obtenido,anio_ingreso,anio_egreso,fecha_inicio_texto,fecha_termino_texto,ubicacion,modalidad,descripcion,especialidades,es_estudio_actual",
                 "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
             },
         )
         experience_rows = await self._rest_get(
             "trayectoria_laboral",
             {
-                "select": "id,empresa,titulo_cargo,descripcion_logros,fecha_ingreso,fecha_salida,es_trabajo_actual",
+                "select": "id,empresa,titulo_cargo,descripcion_logros,fecha_ingreso,fecha_salida,es_trabajo_actual,ubicacion,tipo_jornada,fecha_ingreso_texto,fecha_salida_texto",
                 "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
             },
         )
@@ -707,18 +860,33 @@ class SupabaseAuthService:
             first_name=profile["nombres"],
             last_name=profile["apellidos"],
             phone=profile.get("telefono_movil"),
+            cargo_objetivo=profile.get("cargo_objetivo") or "",
+            region=profile.get("region") or "",
+            comuna=profile.get("comuna") or "",
+            linkedin=profile.get("url_linkedin") or "",
+            portafolio=profile.get("url_portafolio") or "",
+            resumen_profesional=profile.get("resumen_profesional") or "",
             education=[
                 {
                     "id": row["id"],
-                    "institution": row["institucion"],
-                    "degree": row["grado_obtenido"],
-                    "startDate": str(row["anio_ingreso"]),
-                    "endDate": str(row["anio_egreso"]) if row.get("anio_egreso") else "Presente",
-                    "tags": [],
+                    "institution": row.get("institucion") or "",
+                    "degree": row.get("grado_obtenido") or "",
+                    "startDate": row.get("fecha_inicio_texto") or (str(row["anio_ingreso"]) if row.get("anio_ingreso") else ""),
+                    "endDate": row.get("fecha_termino_texto") or (str(row["anio_egreso"]) if row.get("anio_egreso") else ""),
+                    "tags": row.get("especialidades") or [],
+                    "location": row.get("ubicacion") or "",
+                    "studyMode": row.get("modalidad") or "",
+                    "description": row.get("descripcion") or "",
+                    "studying": bool(row.get("es_estudio_actual", False)),
                 }
                 for row in education_rows
+                if row.get("institucion") or row.get("grado_obtenido")
             ],
-            experience=[_profile_experience_from_row(row) for row in experience_rows],
+            experience=[
+                experience
+                for row in experience_rows
+                if (experience := _profile_experience_from_row(row))["role"] or experience["company"]
+            ],
             skills=[row["nombre_habilidad"] for row in skill_rows],
             salary_min=profile.get("expectativa_salarial_liquida"),
             salary_max=None,
@@ -899,6 +1067,95 @@ class SupabaseAuthService:
         )
         if response.is_error:
             raise AuthServiceError(self._database_error(response, "No fue posible eliminar la postulación"), 502)
+
+    async def ai_provider_credential(self, user_id: str) -> dict[str, Any] | None:
+        rows = await self._rest_get(
+            "credenciales_proveedores_ia",
+            {
+                "select": "id,proveedor,nombre,modelo_id,api_key_cifrada,version_cifrado,es_activa",
+                "usuario_id": f"eq.{user_id}",
+                "proveedor": "eq.openrouter",
+                "nombre": "eq.OpenRouter",
+                "order": "actualizada_en.desc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def save_ai_provider_credential(
+        self,
+        user_id: str,
+        encrypted_api_key: str,
+        model_id: str | None,
+        activate: bool,
+    ) -> dict[str, Any]:
+        self._require_admin_headers()
+        url = f"{self._base_url}/rest/v1/credenciales_proveedores_ia"
+        row = {
+            "usuario_id": user_id,
+            "proveedor": "openrouter",
+            "nombre": "OpenRouter",
+            "modelo_id": model_id,
+            "api_key_cifrada": encrypted_api_key,
+            "version_cifrado": 1,
+            "es_activa": False,
+            "actualizada_en": datetime.now(timezone.utc).isoformat(),
+        }
+        response = await self._client.post(
+            url,
+            headers={**self._admin_headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "usuario_id,proveedor,nombre"},
+            json=row,
+        )
+        if response.is_error:
+            raise AuthServiceError(self._database_error(response, "No fue posible guardar la credencial de OpenRouter"), 502)
+        saved_rows = response.json()
+        if not isinstance(saved_rows, list) or not saved_rows or not isinstance(saved_rows[0].get("id"), str):
+            raise AuthServiceError("Supabase no confirmó el guardado de la credencial de OpenRouter", 502)
+        credential_id = saved_rows[0]["id"]
+
+        if activate:
+            deactivate_response = await self._client.patch(
+                url,
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={
+                    "usuario_id": f"eq.{user_id}",
+                    "es_activa": "eq.true",
+                    "id": f"neq.{credential_id}",
+                },
+                json={"es_activa": False, "actualizada_en": datetime.now(timezone.utc).isoformat()},
+            )
+            if deactivate_response.is_error:
+                raise AuthServiceError(
+                    self._database_error(deactivate_response, "No fue posible actualizar el proveedor seleccionado"),
+                    502,
+                )
+            activate_response = await self._client.patch(
+                url,
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{credential_id}", "usuario_id": f"eq.{user_id}"},
+                json={"es_activa": True, "actualizada_en": datetime.now(timezone.utc).isoformat()},
+            )
+            if activate_response.is_error:
+                raise AuthServiceError(
+                    self._database_error(activate_response, "No fue posible activar el modelo de OpenRouter"),
+                    502,
+                )
+        return saved_rows[0]
+
+    async def delete_ai_provider_credential(self, user_id: str) -> None:
+        self._require_admin_headers()
+        response = await self._client.delete(
+            f"{self._base_url}/rest/v1/credenciales_proveedores_ia",
+            headers=self._admin_headers,
+            params={
+                "usuario_id": f"eq.{user_id}",
+                "proveedor": "eq.openrouter",
+                "nombre": "eq.OpenRouter",
+            },
+        )
+        if response.is_error:
+            raise AuthServiceError(self._database_error(response, "No fue posible eliminar la credencial de OpenRouter"), 502)
 
     def _require_admin_headers(self) -> None:
         if not self._admin_headers:

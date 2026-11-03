@@ -157,6 +157,12 @@ class LoginRequest(BaseModel):
     )
 
 
+class RefreshTokenRequest(BaseModel):
+    """Token de renovación de una sesión Supabase."""
+
+    refresh_token: SecretStr = Field(min_length=1)
+
+
 class PasswordRecoveryRequest(BaseModel):
     """Correo al que Supabase enviará un enlace de recuperación."""
 

@@ -37,36 +37,54 @@ privada `SUPABASE_SERVICE_ROLE_KEY`; nunca la expongas en el frontend ni la
 subas a Git. La restricción `UNIQUE` de `perfiles_candidatos.rut_identificador`
 impide duplicar el RUT.
 
-## Respuestas de postulación con Ollama
+## Configuración de IA con OpenRouter
 
-`POST /api/v1/auth/ia/autocompletar` usa el token del usuario para cargar su Perfil Maestro desde Supabase y genera respuestas con Ollama. El backend registra la cantidad de preguntas y la cobertura del perfil, sin guardar las preguntas ni datos personales en los logs.
+En `/adaptador/modelo`, cada persona conecta su propia API key de OpenRouter y
+elige un modelo gratuito. El modelo seleccionado se consulta y guarda en
+`credenciales_proveedores_ia` en Supabase. La API key se cifra con Fernet antes
+de guardarse; solo
+el backend la descifra y la envía a OpenRouter. Nunca se devuelve al navegador,
+se incluye en logs ni se conserva en el almacenamiento de la extensión.
 
-Por defecto, FastAPI espera Ollama en `http://127.0.0.1:11434` y usa el modelo `llama3.2`. Asegúrate de tener Ollama ejecutándose y descarga el modelo:
+Configura `AI_CREDENTIALS_ENCRYPTION_KEY` en el entorno del backend. Genera una
+clave una sola vez con `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`,
+guárdala como secreto y mantenla estable e idéntica en cada instancia de backend
+que comparta la base de datos. Si se pierde o cambia, las API keys ya cifradas no
+se podrán recuperar. La variable es necesaria para conectar una nueva key y
+para usar una credencial existente.
 
-```powershell
-ollama pull llama3.2
-ollama list
-```
+Todas las operaciones de IA requieren una API key y un modelo activo guardados
+en Supabase. Si falta la configuración o OpenRouter no está disponible, la API
+devuelve un error explícito y no cambia a otro proveedor.
 
-Los valores se pueden cambiar por entorno para desarrollo o despliegue:
+## Extracción de currículums
 
-```dotenv
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=llama3.2
-OLLAMA_TIMEOUT_SECONDS=45
-```
+`POST /api/v1/auth/ia/procesar-cv` envía el texto legible del PDF al modelo
+seleccionado en OpenRouter. Los documentos extensos se procesan en fragmentos solapados para
+no truncar el final del CV. El modelo identifica secciones por su contenido
+aunque el archivo no use el encabezado exacto «Experiencia Laboral». Los campos
+de experiencia, formación y habilidades se aceptan solo si el modelo aporta
+evidencia textual localizable en el documento; los campos sin respaldo se dejan
+vacíos. Los PDF escaneados que no contienen texto todavía requieren OCR.
 
-Comprueba la conexión desde FastAPI en `GET /health/ai`. Si FastAPI corre en Docker y Ollama en el host, configura `OLLAMA_BASE_URL=http://host.docker.internal:11434`. Para escalar, ejecuta Ollama como un servicio separado y configura la URL interna alcanzable desde FastAPI; no expongas el puerto de Ollama directamente a Internet.
+## Modelos gratuitos de OpenRouter para adaptar el CV
 
-## Extracción de currículums con Ollama
+La interfaz consulta `GET /api/v1/auth/ia/openrouter/models` y solo ofrece
+modelos de texto cuyo identificador termina en `:free` y cuyo precio de entrada
+y salida es cero. El backend valida la API key y el modelo antes de guardar la
+credencial cifrada. Las peticiones del frontend y de la extensión solo llevan el
+token de sesión; el proveedor activo, el modelo y la clave se resuelven desde
+Supabase en el backend.
 
-`POST /api/v1/auth/ia/procesar-cv` envía a Ollama todo el texto legible extraído
-del PDF. Los documentos extensos se procesan en fragmentos solapados para no
-truncar el final del CV. El modelo identifica secciones por su contenido aunque
-el archivo no use el encabezado exacto «Experiencia Laboral». Los campos de
-experiencia, formación y habilidades se aceptan solo si Ollama aporta evidencia
-textual localizable en el documento; los campos sin respaldo se dejan vacíos.
-Los PDF escaneados que no contienen texto todavía requieren OCR.
+Las rutas de extracción del CV, adaptación y respuestas de postulaciones envían
+sus datos al modelo seleccionado. Los modelos gratuitos pueden cambiar, tener
+límites o dejar de estar disponibles.
+
+La interfaz espera hasta 30 minutos por el análisis e informa el tiempo transcurrido.
+Cuando OpenRouter termina, el Perfil Maestro se sincroniza automáticamente mediante
+`PUT /api/v1/auth/profile`; la importación solo se marca como completada después
+de confirmar esa sincronización. Si la base de datos no responde, los datos quedan
+en pantalla y se muestra un aviso para permitir reintentar.
 
 ## Endpoints
 
@@ -94,6 +112,11 @@ Si la confirmación de correo está activa en Supabase, el registro responde sin
 `access_token` y con `requires_email_confirmation: true`. El usuario debe abrir
 el enlace recibido antes de iniciar sesión. Si la confirmación está desactivada,
 Supabase entrega los tokens inmediatamente.
+
+`POST /api/v1/auth/refresh` recibe el `refresh_token` de la sesión y devuelve
+tokens renovados. El frontend renueva automáticamente las sesiones vencidas y
+reintenta una vez la sincronización del Perfil Maestro si la API rechaza un
+access token expirado.
 
 Si falla la escritura de `usuarios` o `perfiles_candidatos`, el backend elimina
 los registros parciales y la cuenta Auth recién creada para evitar usuarios

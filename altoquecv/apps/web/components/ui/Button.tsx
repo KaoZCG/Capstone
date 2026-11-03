@@ -1,7 +1,7 @@
 import React from "react";
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "success" | "secondary" | "ghost";
 }
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -10,6 +10,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     
     const variants = {
       primary: "bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container",
+      success: "bg-success text-on-success hover:bg-success-container hover:text-on-success-container",
       secondary: "bg-surface-container-high text-on-surface hover:bg-surface-container-highest",
       ghost: "bg-transparent text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface",
     };

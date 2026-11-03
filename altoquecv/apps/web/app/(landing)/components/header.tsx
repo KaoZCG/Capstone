@@ -22,7 +22,7 @@ export function LandingHeader() {
 
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-primary text-white rounded-lg font-extrabold text-lg flex items-center justify-center">A</div>
+          <div className="w-8 h-8 bg-primary text-on-primary rounded-lg font-extrabold text-lg flex items-center justify-center">A</div>
           <span className="text-xl font-bold text-on-surface tracking-tight">Altoque<span className="text-primary">CV</span></span>
         </Link>
 
@@ -60,7 +60,7 @@ export function LandingHeader() {
 
           <Link
             href="/signup"
-            className="px-4 py-2 text-sm font-semibold text-white bg-primary hover:bg-primary/95 hover:shadow-md transition-all rounded-lg"
+            className="px-4 py-2 text-sm font-semibold text-on-primary bg-primary hover:bg-primary/95 hover:shadow-md transition-all rounded-lg"
           >
             Crear cuenta
           </Link>

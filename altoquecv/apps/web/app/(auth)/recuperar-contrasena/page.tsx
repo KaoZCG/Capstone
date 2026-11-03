@@ -82,7 +82,7 @@ export default function RecuperarContrasenaPage() {
                 disabled={!isEmailValid || isSubmitting}
                 className={`w-full py-3 rounded-lg font-medium transition-all duration-200 ${
                   isEmailValid && !isSubmitting
-                    ? 'bg-primary text-white hover:shadow-lg hover:opacity-90'
+                    ? 'bg-primary text-on-primary hover:shadow-lg hover:opacity-90'
                     : 'bg-surface-container-highest text-on-surface-variant cursor-not-allowed opacity-70'
                 }`}
               >

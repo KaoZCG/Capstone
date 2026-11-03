@@ -12,6 +12,7 @@ export interface AuthSession {
   usuario: User;
   token: string;
   expiresAt: string;
+  refreshToken?: string;
 }
 
 export interface LoginCredentials {
@@ -37,6 +38,7 @@ export interface PasswordRecoveryData {
 export interface AuthContextType {
   usuario: User | null;
   accessToken: string | null;
+  refreshSession: () => Promise<string>;
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (credentials: LoginCredentials) => Promise<{ success?: boolean } | void>;

@@ -1,4 +1,27 @@
 export const TECHNICAL_SKILL_CATEGORIES: Record<string, string[]> = {
+  'Competencias profesionales transversales': [
+    'Atención al cliente', 'Ventas consultivas', 'Gestión de inventario', 'Gestión de caja',
+    'Administración de oficina', 'Gestión documental', 'Coordinación de agenda',
+    'Gestión de proveedores', 'Compras y abastecimiento', 'Logística y distribución',
+    'Control de calidad', 'Prevención de riesgos', 'Planificación de turnos',
+    'Gestión de proyectos', 'Capacitación de personas', 'Diseño instruccional',
+    'Cuidado de personas', 'Primeros auxilios', 'Gestión de operaciones',
+    'Facturación y cobranzas', 'Contabilidad', 'Análisis financiero',
+    'Producción y manufactura', 'Mantención de equipos', 'Gestión de alimentos',
+    'Aseo y sanitización', 'Conducción profesional', 'Manejo de maquinaria',
+    'Redacción y edición', 'Investigación', 'Mediación y resolución de conflictos',
+  ],
+  'Habilidades blandas': [
+    'Comunicación efectiva', 'Escucha activa', 'Empatía', 'Trabajo en equipo',
+    'Colaboración', 'Liderazgo', 'Adaptabilidad', 'Flexibilidad',
+    'Resolución de problemas', 'Pensamiento crítico', 'Creatividad',
+    'Organización', 'Gestión del tiempo', 'Responsabilidad', 'Proactividad',
+    'Atención al detalle', 'Orientación a resultados', 'Orientación al cliente',
+    'Negociación', 'Manejo de conflictos', 'Inteligencia emocional',
+    'Aprendizaje continuo', 'Toma de decisiones', 'Resiliencia',
+    'Planificación', 'Autonomía', 'Ética profesional', 'Paciencia',
+    'Capacidad de enseñar', 'Gestión del cambio', 'Comunicación intercultural',
+  ],
   'Lenguajes y scripting': [
     'JavaScript', 'TypeScript', 'Python', 'Java', 'C', 'C++', 'C#', 'Go', 'Rust', 'PHP',
     'Ruby', 'Kotlin', 'Swift', 'Dart', 'R', 'Scala', 'Bash', 'PowerShell', 'SQL', 'Solidity',

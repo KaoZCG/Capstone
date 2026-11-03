@@ -20,6 +20,7 @@ export interface Education {
   location?: string;
   studyMode?: string;
   description?: string;
+  studying?: boolean;
 }
 
 export interface Experience {

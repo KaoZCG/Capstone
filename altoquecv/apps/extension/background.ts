@@ -2,24 +2,71 @@ declare const chrome: any;
 
 const API_URL = 'http://localhost:8000/api/v1';
 const SESSION_KEY = 'altoquecv_extension_session';
+const AI_MODEL_CONFIG_KEY = 'altoquecv_ai_model_config';
+let aiModelConfig: {
+  modelId: string | null;
+} = { modelId: null };
+
+chrome.storage.session.get(AI_MODEL_CONFIG_KEY, (stored: Record<string, any>) => {
+  const savedConfig = stored[AI_MODEL_CONFIG_KEY];
+  if (savedConfig && (typeof savedConfig.modelId === 'string' || savedConfig.modelId === null)) {
+    aiModelConfig = {
+      modelId: savedConfig.modelId,
+    };
+    chrome.storage.session.set({ [AI_MODEL_CONFIG_KEY]: aiModelConfig });
+  } else {
+    chrome.storage.session.remove(AI_MODEL_CONFIG_KEY);
+  }
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[AltoqueCV] Extensión instalada y lista para inyectar widgets.");
 });
 
 chrome.runtime.onMessage.addListener((message: any, _sender: unknown, sendResponse: (response: unknown) => void) => {
+  if (message?.type === 'ALTOQUE_CONFIGURAR_MODELO_IA') {
+    if (message.modelId !== null && typeof message.modelId !== 'string') {
+      sendResponse({ exito: false, detail: 'Modelo de IA inválido.' });
+      return false;
+    }
+    aiModelConfig = {
+      modelId: message.modelId,
+    };
+    chrome.storage.session.set({ [AI_MODEL_CONFIG_KEY]: aiModelConfig });
+    sendResponse({ exito: true });
+    return false;
+  }
+
   const isWarmup = message?.type === 'ALTOQUE_PRECALENTAR_IA';
   const isProfileRequest = message?.type === 'ALTOQUE_OBTENER_PERFIL';
   const isSavedLaborumOfferRequest = message?.type === 'ALTOQUE_OBTENER_OFERTA_LABORUM';
   if (!isWarmup && !isProfileRequest && !isSavedLaborumOfferRequest && message?.type !== 'ALTOQUE_AUTOCOMPLETAR') return false;
 
   void (async () => {
+    const storedModelConfig = await new Promise<Record<string, any>>((resolve) => {
+      chrome.storage.session.get(AI_MODEL_CONFIG_KEY, resolve);
+    });
+    const savedConfig = storedModelConfig[AI_MODEL_CONFIG_KEY];
+    if (savedConfig && (typeof savedConfig.modelId === 'string' || savedConfig.modelId === null)) {
+      aiModelConfig = {
+      modelId: savedConfig.modelId,
+      };
+      chrome.storage.session.set({ [AI_MODEL_CONFIG_KEY]: aiModelConfig });
+    } else {
+      aiModelConfig = { modelId: null };
+      chrome.storage.session.remove(AI_MODEL_CONFIG_KEY);
+    }
+
     const stored = await new Promise<Record<string, any>>((resolve) => {
       chrome.storage.local.get(SESSION_KEY, resolve);
     });
     const session = stored[SESSION_KEY];
     if (!session?.accessToken || session.expiresAt <= Date.now()) {
       sendResponse({ exito: false, detail: 'Inicia sesión desde el popup de AltoqueCV para usar tu Perfil Maestro.' });
+      return;
+    }
+    if (!isProfileRequest && !isSavedLaborumOfferRequest && !aiModelConfig.modelId) {
+      sendResponse({ exito: false, detail: 'Selecciona un modelo de OpenRouter en AltoqueCV antes de autocompletar.' });
       return;
     }
 

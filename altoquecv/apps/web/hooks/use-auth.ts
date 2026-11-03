@@ -70,18 +70,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
+  const refreshSession = useCallback(async (): Promise<string> => {
+    const saved = loadFromStorage<{
+      usuario: User;
+      token: string;
+      expiresAt: string;
+      refreshToken?: string;
+    }>(AUTH_STORAGE_KEY);
+    if (!saved?.refreshToken) {
+      throw new Error('La sesión expiró. Inicia sesión nuevamente para guardar el perfil.');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: saved.refreshToken }),
+      });
+    } catch {
+      throw new Error('No fue posible conectar con el servidor para renovar la sesión.');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.access_token || !data.refresh_token) {
+      if (response.status === 401 || response.status === 400) {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        setUsuario(null);
+        setAccessToken(null);
+        notifyExtensionSessionChanged();
+        throw new Error('La sesión expiró. Inicia sesión nuevamente para guardar el perfil.');
+      }
+      throw new Error(getApiError(data, 'No fue posible renovar la sesión.'));
+    }
+
+    const user = normalizeUserFromResponse(data, saved.usuario.email);
+    const session = {
+      usuario: user,
+      token: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: new Date(Date.now() + ((data.expires_in ?? 3600) * 1000)).toISOString(),
+    };
+    saveToStorage(AUTH_STORAGE_KEY, session);
+    setUsuario(user);
+    setAccessToken(data.access_token);
+    notifyExtensionSessionChanged();
+    return data.access_token;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     async function restoreSession() {
-      const saved = loadFromStorage<{ usuario: User; token: string; expiresAt: string }>(AUTH_STORAGE_KEY);
-      if (!saved || isTokenExpired(saved.token) || new Date(saved.expiresAt) <= new Date()) {
+      let saved = loadFromStorage<{
+        usuario: User;
+        token: string;
+        expiresAt: string;
+        refreshToken?: string;
+      }>(AUTH_STORAGE_KEY);
+      if (!saved) {
         localStorage.removeItem(AUTH_STORAGE_KEY);
         if (!cancelled) setIsLoading(false);
         return;
       }
 
       try {
+        if (isTokenExpired(saved.token) || new Date(saved.expiresAt) <= new Date()) {
+          await refreshSession();
+          saved = loadFromStorage(AUTH_STORAGE_KEY);
+          if (!saved) throw new Error('Sesión no disponible después de renovar');
+        }
+
         const response = await fetch(`${API_URL}/auth/me`, {
           headers: { Authorization: `Bearer ${saved.token}` },
         });
@@ -106,7 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshSession]);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
     setIsLoading(true);
@@ -130,6 +189,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const session = {
         usuario: user,
         token: data.access_token,
+        refreshToken: data.refresh_token,
         expiresAt: new Date(Date.now() + ((data.expires_in ?? 3600) * 1000)).toISOString(),
       };
 
@@ -206,6 +266,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const session = {
         usuario: user,
         token: body.access_token ?? '',
+        refreshToken: body.refresh_token,
         expiresAt: new Date(Date.now() + ((body.expires_in ?? 3600) * 1000)).toISOString(),
       };
 
@@ -247,6 +308,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value: {
         usuario,
         accessToken,
+        refreshSession,
         isLoading,
         isAuthenticated: !!usuario,
         login,

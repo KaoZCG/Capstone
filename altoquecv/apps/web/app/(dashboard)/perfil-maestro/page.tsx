@@ -2,6 +2,7 @@
 
 import { PhoneInput } from '@/components/ui/PhoneInput';
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
@@ -9,12 +10,13 @@ import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { useAuth } from '@/hooks/use-auth';
+import { useAIModel } from '@/hooks/use-ai-model';
 import { useProfile } from '@/hooks/use-profile';
 import { Education, Experience } from '@/types/perfil';
 import { PROFILE_KEYWORD_CATEGORIES, TECHNICAL_SKILL_CATEGORIES } from '@/lib/profile-catalogs';
 import { getNationalPhoneNumber, toInternationalPhoneNumber } from '@/lib/auth';
 import chileLocations from '@/lib/chile-locations.json';
-import { Download, FileText, Pencil, Search, Trash2, UserRound, X } from 'lucide-react';
+import { Download, FileText, LoaderCircle, Pencil, Search, Sparkles, Trash2, UserRound, X } from 'lucide-react';
 import CargadorCV from '@/components/perfil-maestro/CargadorCV';
 import { deleteOriginalProfileCV, loadOriginalProfileCV, type StoredProfileCV } from '@/lib/profile-cv-storage';
 import { useProfileAvatar } from '@/hooks/use-profile-avatar';
@@ -25,12 +27,6 @@ type ProfileModal = 'education' | 'experience' | 'skills' | 'keywords' | 'confir
 
 const CHILE_REGIONS = chileLocations.regions;
 
-function formatFileSize(bytes: number): string {
-  return bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-    : `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
-
 function normalizeExperiencePart(value: string | undefined): string {
   return (value ?? '')
     .normalize('NFD')
@@ -40,20 +36,16 @@ function normalizeExperiencePart(value: string | undefined): string {
     .toLocaleLowerCase('es-CL');
 }
 
-function isOnlyExperienceSectionNoise(role: string | undefined): boolean {
-  const words = normalizeExperiencePart(role).match(/[a-z0-9]+/g) ?? [];
-  const sectionLabels = new Set([
-    'academica',
-    'academicas',
-    'academico',
-    'academicos',
-    'destacable',
-    'experiencia',
-    'formacion',
-    'laboral',
-    'profesional',
-  ]);
-  return words.length === 0 || words.every((word) => sectionLabels.has(word));
+function toMonthInputValue(value: string): string {
+  const isoDate = value.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+  return isoDate ? `${isoDate[1]}-${isoDate[2]}` : value;
+}
+
+function formatProfileDate(value: string): string {
+  const monthDate = value.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+  if (!monthDate) return value;
+  const [, year, month] = monthDate;
+  return month === '01' ? year : `${month}/${year}`;
 }
 
 function deduplicateExperiences(items: Experience[]): Experience[] {
@@ -86,7 +78,7 @@ const emptyEducationForm = {
   endDate: '',
   studying: false,
   location: '',
-  studyMode: 'Presencial',
+  studyMode: '',
   description: '',
   tags: '',
 };
@@ -112,7 +104,8 @@ const tabs = [
 ];
 
 export default function PerfilMaestroPage() {
-  const { usuario, accessToken, isLoading: isAuthLoading } = useAuth();
+  const { usuario, accessToken, refreshSession, isLoading: isAuthLoading } = useAuth();
+  const { hasApiKey, selectedModel, isLoading: isLoadingAI } = useAIModel();
   const { profile, isLoading, error: profileLoadError } = useProfile();
   const [activeTab, setActiveTab] = useState(tabs[0]);
   const [education, setEducation] = useState<Education[]>([]);
@@ -122,6 +115,7 @@ export default function PerfilMaestroPage() {
   const [modal, setModal] = useState<ProfileModal>(null);
   const [educationForm, setEducationForm] = useState(emptyEducationForm);
   const [experienceForm, setExperienceForm] = useState(emptyExperienceForm);
+  const [editingEducationId, setEditingEducationId] = useState<string | null>(null);
   const [editingExperienceId, setEditingExperienceId] = useState<string | null>(null);
   const [catalogSearch, setCatalogSearch] = useState('');
   const [customCatalogValue, setCustomCatalogValue] = useState('');
@@ -133,6 +127,9 @@ export default function PerfilMaestroPage() {
   const [isClearingProfile, setIsClearingProfile] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [summaryMessage, setSummaryMessage] = useState('');
+  const [summaryError, setSummaryError] = useState('');
   const [hydratedKey, setHydratedKey] = useState('');
   const storageKey = `altoquecv-profile:${profile?.user_id ?? usuario?.email ?? 'local'}`;
   const cvOwnerId = profile?.user_id ?? usuario?.id ?? usuario?.email ?? 'local';
@@ -144,7 +141,7 @@ export default function PerfilMaestroPage() {
     nombre: usuario?.nombre || '',
     rut: usuario?.rut || '',
     email: usuario?.email || '',
-    teléfono: usuario?.teléfono || '',
+    teléfono: getNationalPhoneNumber(usuario?.teléfono || '', '+56'),
     codigoTeléfono: '+56',
     región: '',
     comuna: '',
@@ -179,6 +176,12 @@ export default function PerfilMaestroPage() {
         profile ? profile.phone ?? '' : savedPersonalData.teléfono ?? usuario?.teléfono ?? '',
         countryCode,
       ),
+      región: profile ? profile.region : savedPersonalData.región ?? personalData.región ?? '',
+      comuna: profile ? profile.comuna : savedPersonalData.comuna ?? personalData.comuna ?? '',
+      cargoObjetivo: profile ? profile.cargo_objetivo : savedPersonalData.cargoObjetivo ?? personalData.cargoObjetivo ?? '',
+      linkedin: profile ? profile.linkedin : savedPersonalData.linkedin ?? personalData.linkedin ?? '',
+      portafolio: profile ? profile.portafolio : savedPersonalData.portafolio ?? personalData.portafolio ?? '',
+      resumen: profile ? profile.resumen_profesional : savedPersonalData.resumen ?? personalData.resumen ?? '',
     };
 
     setPersonalData({
@@ -270,83 +273,119 @@ export default function PerfilMaestroPage() {
     }));
   };
 
-// Atrapa los datos de la IA y actualiza todos los estados de React a la vez
-  const handleDatosExtraidosIA = (datosIA: any) => {
-    setHasProcessedCV(true);
+  const syncProfileToServer = async (perfilLocal: {
+    personalData: typeof personalData;
+    education: Education[];
+    experience: Experience[];
+    skills: string[];
+    keywords: string[];
+    salaryData: typeof salaryData;
+  }) => {
+    if (!accessToken) {
+      throw new Error('No hay una sesión activa para sincronizar el perfil.');
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 60_000);
     try {
-      localStorage.setItem(`${storageKey}:cv-processed`, '1');
+      const body = JSON.stringify({
+        ...perfilLocal,
+        personalData: {
+          ...perfilLocal.personalData,
+          teléfono: toInternationalPhoneNumber(
+            perfilLocal.personalData.teléfono,
+            perfilLocal.personalData.codigoTeléfono,
+          ),
+        },
+      });
+      const sendProfile = (token: string) => fetch(`${API_URL}/auth/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: ['Bearer', token].join(' '),
+        },
+        body,
+        signal: controller.signal,
+      });
+      let response = await sendProfile(accessToken);
+      if (response.status === 401) {
+        const refreshedToken = await refreshSession();
+        response = await sendProfile(refreshedToken);
+      }
+
+      const responseBody = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseBody.detail || 'No fue posible sincronizar el Perfil Maestro.');
+      }
     } catch (error) {
-      console.error('No se pudo guardar el estado de importación del CV:', error);
+      if (controller.signal.aborted) {
+        throw new Error('La sincronización con la base de datos superó 60 segundos.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
+  };
 
-    if (datosIA.personalData) {
-      setPersonalData((previous) => ({
-        ...previous,
-        ...datosIA.personalData,
-        rut: datosIA.personalData.rut?.trim() || previous.rut,
-        teléfono: getNationalPhoneNumber(
-          datosIA.personalData.teléfono ?? previous.teléfono,
-          previous.codigoTeléfono,
-        ),
-        resumen: datosIA.personalData.resumen?.trim() || previous.resumen,
-      }));
-    }
-
-    if (datosIA.skills && Array.isArray(datosIA.skills)) {
-      setSkills(prev => Array.from(new Set([...prev, ...datosIA.skills])));
-    }
-
-    if (datosIA.keywords && Array.isArray(datosIA.keywords)) {
-      setKeywords(prev => Array.from(new Set([...prev, ...datosIA.keywords])));
-    }
-
-    if (datosIA.salaryData) {
-      setSalaryData(prev => ({ ...prev, ...datosIA.salaryData }));
-    }
-
-
+  const handleDatosExtraidosIA = async (datosIA: any): Promise<string | undefined> => {
+    const datosPersonalesIA = datosIA.personalData && typeof datosIA.personalData === 'object'
+      ? datosIA.personalData
+      : {};
+    const nextPersonalData = {
+      ...personalData,
+      ...datosPersonalesIA,
+      'región': datosPersonalesIA.región ?? datosPersonalesIA.region ?? personalData.región,
+      comuna: datosPersonalesIA.comuna ?? personalData.comuna,
+      rut: datosPersonalesIA.rut?.trim() || personalData.rut,
+      teléfono: getNationalPhoneNumber(
+        datosPersonalesIA.teléfono ?? personalData.teléfono,
+        personalData.codigoTeléfono,
+      ),
+      resumen: datosPersonalesIA.resumen?.trim() || personalData.resumen,
+    };
+    const importedSkills = Array.isArray(datosIA.skills)
+      ? datosIA.skills.filter((skill: unknown): skill is string => typeof skill === 'string')
+      : [];
+    const importedKeywords = Array.isArray(datosIA.keywords)
+      ? datosIA.keywords.filter((keyword: unknown): keyword is string => typeof keyword === 'string')
+      : [];
+    const nextSkills = Array.from(new Set([...skills, ...importedSkills]));
+    const nextKeywords = Array.from(new Set([...keywords, ...importedKeywords]));
+    const nextSalaryData = datosIA.salaryData
+      ? { ...salaryData, ...datosIA.salaryData }
+      : salaryData;
     const experienceEntries = Array.isArray(datosIA.experience)
       ? datosIA.experience
       : Array.isArray(datosIA.experiencia) ? datosIA.experiencia : [];
-    if (experienceEntries.length > 0) {
-      const nuevasExperiencias = experienceEntries
-        .filter((exp: any) => exp && typeof exp === 'object')
-        .map((exp: any): Experience => {
-          const endDate = exp.fecha_fin ?? exp.endDate ?? exp.end_date ?? '';
-          const isCurrent = exp.actual === true || exp.isCurrent === true || /presente|actualidad/i.test(String(endDate));
-          const stackTags = exp.habilidades ?? exp.stackTags ?? exp.technologies ?? [];
-          return {
-            id: crypto.randomUUID(),
-            role: exp.cargo || exp.role || exp.puesto || '',
-            company: exp.empresa || exp.company || exp.compania || '',
-            startDate: exp.fecha_inicio || exp.startDate || exp.start_date || '',
-            endDate: isCurrent ? 'Presente' : endDate,
-            isCurrent,
-            location: exp.ubicacion || exp.location || '',
-            employmentType: exp.tipo_jornada || exp.employmentType || '',
-            description: exp.descripcion || exp.description || exp.responsabilidades || '',
-            stackTags: Array.isArray(stackTags)
-              ? stackTags.filter((tag: unknown): tag is string => typeof tag === 'string')
-              : typeof stackTags === 'string' ? stackTags.split(',').map((tag: string) => tag.trim()).filter(Boolean) : [],
-          };
-        })
-        .filter((exp: Experience) => exp.role || exp.company);
-      const empresasImportadas = new Set(nuevasExperiencias.map((exp: Experience) => normalizeExperiencePart(exp.company)));
-      setExperience((previous) => {
-        const experienciasPrevias = previous.filter((exp: Experience) => (
-          !empresasImportadas.has(normalizeExperiencePart(exp.company))
-          || !isOnlyExperienceSectionNoise(exp.role)
-        ));
-        return deduplicateExperiences([...nuevasExperiencias, ...experienciasPrevias]);
-      });
-    }
-
-
+    const nuevasExperiencias = experienceEntries
+      .filter((exp: any) => exp && typeof exp === 'object')
+      .map((exp: any): Experience => {
+        const endDate = exp.fecha_fin ?? exp.endDate ?? exp.end_date ?? '';
+        const isCurrent = exp.actual === true || exp.isCurrent === true || /presente|actualidad/i.test(String(endDate));
+        const stackTags = exp.habilidades ?? exp.stackTags ?? exp.technologies ?? [];
+        return {
+          id: crypto.randomUUID(),
+          role: exp.cargo || exp.role || exp.puesto || '',
+          company: exp.empresa || exp.company || exp.compania || '',
+          startDate: exp.fecha_inicio || exp.startDate || exp.start_date || '',
+          endDate: isCurrent ? 'Presente' : endDate,
+          isCurrent,
+          location: exp.ubicacion || exp.location || '',
+          employmentType: exp.tipo_jornada || exp.employmentType || '',
+          description: exp.descripcion || exp.description || exp.responsabilidades || '',
+          stackTags: Array.isArray(stackTags)
+            ? stackTags.filter((tag: unknown): tag is string => typeof tag === 'string')
+            : typeof stackTags === 'string' ? stackTags.split(',').map((tag: string) => tag.trim()).filter(Boolean) : [],
+        };
+      })
+      .filter((exp: Experience) => exp.role || exp.company);
+    const nextExperience = deduplicateExperiences(nuevasExperiencias);
     const educationEntries = Array.isArray(datosIA.education)
       ? datosIA.education
       : Array.isArray(datosIA.educacion) ? datosIA.educacion : [];
-    if (educationEntries.length > 0) {
-      const nuevaEducacion = educationEntries.filter((edu: any) => edu && typeof edu === 'object').map((edu: any) => ({
+    const nuevaEducacion = educationEntries
+      .filter((edu: any) => edu && typeof edu === 'object')
+      .map((edu: any): Education => ({
         id: crypto.randomUUID(),
         institution: edu.institucion || edu.institution || '',
         degree: edu.titulo || edu.degree || edu.grado || '',
@@ -354,20 +393,74 @@ export default function PerfilMaestroPage() {
         endDate: edu.fecha_fin || edu.endDate || edu.end_date || '',
         studying: edu.actual === true || edu.studying === true,
         location: edu.ubicacion || edu.location || '',
-        studyMode: 'Presencial',
-        description: edu.descripcion || edu.description || 'Formación detectada automáticamente desde tu CV.',
-        tags: Array.isArray(edu.habilidades) ? edu.habilidades.filter((tag: unknown): tag is string => typeof tag === 'string') : [],
-      })).filter((edu: Education) => edu.institution || edu.degree);
-      setEducation(prev => [...prev, ...nuevaEducacion]);
+        studyMode: edu.modalidad || edu.studyMode || '',
+        description: edu.descripcion || edu.description || '',
+        tags: Array.isArray(edu.habilidades ?? edu.tags)
+          ? (edu.habilidades ?? edu.tags).filter((tag: unknown): tag is string => typeof tag === 'string')
+          : [],
+      }))
+      .filter((edu: Education) => edu.institution || edu.degree);
+    const educationKeys = new Set<string>();
+    const nextEducation = nuevaEducacion.filter((item: Education) => {
+      const key = [
+        item.institution,
+        item.degree,
+        item.startDate,
+        item.endDate,
+      ].map(normalizeExperiencePart).join('|');
+      if (educationKeys.has(key)) return false;
+      educationKeys.add(key);
+      return true;
+    });
+    const perfilLocal = {
+      personalData: nextPersonalData,
+      education: nextEducation,
+      experience: nextExperience,
+      skills: nextSkills,
+      keywords: nextKeywords,
+      salaryData: nextSalaryData,
+    };
+
+    setPersonalData(nextPersonalData);
+    setEducation(nextEducation);
+    setExperience(nextExperience);
+    setSkills(nextSkills);
+    setKeywords(nextKeywords);
+    setSalaryData(nextSalaryData);
+    setSaveError('');
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(perfilLocal));
+    } catch (error) {
+      console.error('No se pudo guardar el perfil importado en este navegador:', error);
     }
 
-    setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    setIsSavingProfile(true);
+    try {
+      await syncProfileToServer(perfilLocal);
+      setHasProcessedCV(true);
+      try {
+        localStorage.setItem(`${storageKey}:cv-processed`, '1');
+      } catch (error) {
+        console.error('No se pudo guardar el estado de importación del CV:', error);
+      }
+      setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+      return undefined;
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'No fue posible sincronizar el Perfil Maestro con la base de datos.';
+      const warning = `Los datos se extrajeron y quedaron en esta pantalla, pero no se sincronizaron con la base de datos: ${message}`;
+      setSaveError(warning);
+      return warning;
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   const handleEducationSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setEducation((current) => [{
-      id: crypto.randomUUID(),
+    const updatedEducation: Education = {
+      id: editingEducationId ?? crypto.randomUUID(),
       institution: educationForm.institution.trim(),
       degree: educationForm.degree.trim(),
       startDate: educationForm.startDate,
@@ -376,9 +469,31 @@ export default function PerfilMaestroPage() {
       location: educationForm.location.trim(),
       studyMode: educationForm.studyMode,
       description: educationForm.description.trim(),
-    }, ...current]);
+      studying: educationForm.studying,
+    };
+    setEducation((current) => editingEducationId
+      ? current.map((item) => item.id === editingEducationId ? updatedEducation : item)
+      : [updatedEducation, ...current]);
     setEducationForm(emptyEducationForm);
+    setEditingEducationId(null);
     setModal(null);
+  };
+
+  const openEducationEditor = (educationItem: Education) => {
+    const studying = educationItem.studying || educationItem.endDate === 'Presente';
+    setEditingEducationId(educationItem.id);
+    setEducationForm({
+      institution: educationItem.institution,
+      degree: educationItem.degree,
+      startDate: toMonthInputValue(educationItem.startDate),
+      endDate: studying ? '' : toMonthInputValue(educationItem.endDate),
+      studying,
+      location: educationItem.location ?? '',
+      studyMode: educationItem.studyMode ?? '',
+      description: educationItem.description ?? '',
+      tags: educationItem.tags.join(', '),
+    });
+    setModal('education');
   };
 
   const handleExperienceSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -410,8 +525,8 @@ export default function PerfilMaestroPage() {
     setExperienceForm({
       role: experienceItem.role,
       company: experienceItem.company,
-      startDate: experienceItem.startDate,
-      endDate: experienceItem.isCurrent || experienceItem.endDate === 'Presente' ? '' : experienceItem.endDate,
+      startDate: toMonthInputValue(experienceItem.startDate),
+      endDate: experienceItem.isCurrent || experienceItem.endDate === 'Presente' ? '' : toMonthInputValue(experienceItem.endDate),
       isCurrent: experienceItem.isCurrent || experienceItem.endDate === 'Presente',
       location: experienceItem.location ?? '',
       employmentType: experienceItem.employmentType ?? 'Jornada completa',
@@ -456,31 +571,77 @@ export default function PerfilMaestroPage() {
 
     setIsSavingProfile(true);
     try {
-      const response = await fetch(`${API_URL}/auth/profile`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          ...perfilLocal,
-          personalData: {
-            ...personalData,
-            teléfono: toInternationalPhoneNumber(personalData.teléfono, personalData.codigoTeléfono),
-          },
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(body.detail || 'No fue posible sincronizar el Perfil Maestro.');
-      }
-      setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+      await syncProfileToServer(perfilLocal);
     } catch (error) {
       setSaveError(error instanceof Error
         ? `Se guardó en este dispositivo, pero no se sincronizó: ${error.message}`
         : 'Se guardó en este dispositivo, pero no se sincronizó con el servidor.');
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const generateProfessionalSummary = async () => {
+    setSummaryMessage('');
+    setSummaryError('');
+    if (!hasApiKey || !selectedModel) {
+      setSummaryError('Primero configura una API key y un modelo de OpenRouter.');
+      return;
+    }
+    if (!accessToken) {
+      setSummaryError('Inicia sesión para generar el resumen profesional.');
+      return;
+    }
+
+    setIsGeneratingSummary(true);
+    try {
+      const body = JSON.stringify({
+        nombre: personalData.nombre,
+        cargo_objetivo: personalData.cargoObjetivo,
+        resumen_actual: personalData.resumen,
+        experiencia: experience.slice(0, 10).map((item) => ({
+          cargo: item.role,
+          empresa: item.company,
+          fecha_inicio: item.startDate,
+          fecha_fin: item.endDate,
+          descripcion: item.description,
+          habilidades: item.stackTags,
+        })),
+        educacion: education.slice(0, 8).map((item) => ({
+          titulo: item.degree,
+          institucion: item.institution,
+          fecha_inicio: item.startDate,
+          fecha_fin: item.endDate,
+        })),
+        habilidades: skills.slice(0, 40),
+      });
+      const sendRequest = (token: string) => fetch(`${API_URL}/auth/ia/resumen-profesional`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: ['Bearer', token].join(' '),
+        },
+        body,
+      });
+      let response = await sendRequest(accessToken);
+      if (response.status === 401) {
+        response = await sendRequest(await refreshSession());
+      }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof result.detail === 'string'
+          ? result.detail
+          : 'No se pudo generar el resumen profesional.');
+      }
+      if (typeof result.resumen !== 'string' || !result.resumen.trim()) {
+        throw new Error('El modelo no devolvió un resumen profesional. Inténtalo nuevamente.');
+      }
+      setPersonalData((current) => ({ ...current, resumen: result.resumen.trim().slice(0, 1200) }));
+      setSummaryMessage('Resumen generado. Revísalo y guarda los cambios del perfil.');
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : 'No se pudo generar el resumen profesional.');
+    } finally {
+      setIsGeneratingSummary(false);
     }
   };
 
@@ -513,6 +674,35 @@ export default function PerfilMaestroPage() {
       keywords: [],
       salaryData: initialSalaryData,
     };
+
+    if (accessToken) {
+      try {
+        const sendClearRequest = (token: string) => fetch(`${API_URL}/auth/profile/curricular`, {
+          method: 'DELETE',
+          headers: { Authorization: ['Bearer', token].join(' ') },
+        });
+        let response = await sendClearRequest(accessToken);
+        if (response.status === 401) {
+          response = await sendClearRequest(await refreshSession());
+        }
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.exito !== true) {
+          throw new Error(
+            typeof body.detail === 'string'
+              ? body.detail
+              : 'No fue posible confirmar el borrado en la base de datos.',
+          );
+        }
+        setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+      } catch (error) {
+        console.error('No se pudo borrar el contenido curricular de Supabase:', error);
+        errors.push(error instanceof Error
+          ? `no se borraron los datos de la base de datos: ${error.message}`
+          : 'no se borraron los datos de la base de datos');
+      }
+    } else {
+      errors.push('no se pudo borrar la base de datos porque no hay una sesión activa');
+    }
 
     setPersonalData(clearedProfile.personalData);
     setEducation(clearedProfile.education);
@@ -547,39 +737,10 @@ export default function PerfilMaestroPage() {
       errors.push('no se pudo eliminar la copia del CV de este navegador');
     }
 
-    if (accessToken) {
-      try {
-        const response = await fetch(`${API_URL}/auth/profile`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({
-            ...clearedProfile,
-            personalData: {
-              ...clearedProfile.personalData,
-              teléfono: toInternationalPhoneNumber(
-                clearedProfile.personalData.teléfono,
-                clearedProfile.personalData.codigoTeléfono,
-              ),
-            },
-          }),
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(body.detail || 'No fue posible sincronizar el borrado con el servidor.');
-        }
-        setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
-      } catch (error) {
-        console.error('No se pudo sincronizar el borrado del Perfil Maestro:', error);
-        errors.push('el borrado quedó solo en este dispositivo y no se sincronizó con el servidor');
-      }
-    } else {
-      errors.push('el borrado quedó solo en este dispositivo porque no hay una sesión activa');
-    }
-
     setSaveError(errors.length ? `Borrado parcial: ${errors.join('; ')}.` : '');
+    if (errors.length === 0) {
+      setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
+    }
     setShowDeletePanel(false);
     setModal(null); // Cerramos el modal tras borrar
     setIsClearingProfile(false);
@@ -615,6 +776,32 @@ export default function PerfilMaestroPage() {
             </button>
           ))}
         </nav>
+        <div className="group relative mt-3">
+          <Button
+            type="button"
+            variant="secondary"
+            aria-disabled={!savedOriginalCV || isLoadingOriginalCV}
+            aria-describedby={!savedOriginalCV && !isLoadingOriginalCV ? 'download-cv-tooltip' : undefined}
+            title={!savedOriginalCV
+              ? 'No tienes ningún CV guardado actualmente. Completa la importación de tu CV en Datos personales para guardarlo y poder descargarlo.'
+              : undefined}
+            className={`w-full justify-start ${savedOriginalCV && !isLoadingOriginalCV ? '' : 'cursor-not-allowed text-on-surface-variant opacity-60'}`}
+            onClick={() => {
+              if (savedOriginalCV && !isLoadingOriginalCV) downloadOriginalCV();
+            }}
+          >
+            <span className="flex items-center gap-2"><Download size={16} /> Descargar PDF</span>
+          </Button>
+          {!savedOriginalCV && !isLoadingOriginalCV && (
+            <span
+              id="download-cv-tooltip"
+              role="tooltip"
+              className="invisible absolute left-0 top-full z-30 mt-2 w-64 rounded-md border border-border bg-surface-container-high p-3 text-body-sm text-on-surface opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+            >
+              No tienes ningún CV guardado actualmente. Completa la importación de tu CV en Datos personales para guardarlo y poder descargarlo.
+            </span>
+          )}
+        </div>
         <div className="mt-5">
           <Button
             type="button"
@@ -628,7 +815,7 @@ export default function PerfilMaestroPage() {
             <section className="mt-3 rounded-container border border-error/40 bg-error-container/10 p-4">
               <h2 className="text-label-lg font-semibold text-error">Borrar contenido curricular</h2>
               <p className="mt-2 text-body-sm text-on-surface-variant">
-                Se eliminarán educación, experiencia, habilidades, keywords, pretensiones salariales, resumen y la copia local del CV. Nombre, RUT, correo y teléfono se conservarán.
+                Se eliminarán de la base de datos la educación, experiencia, habilidades y pretensión salarial; del navegador también se quitarán las keywords, el resumen y el CV guardado. Se conservarán el nombre, RUT, correo, teléfono, foto y conexión de OpenRouter.
               </p>
               <div className="mt-4 flex flex-col gap-2">
                 <Button
@@ -659,37 +846,6 @@ export default function PerfilMaestroPage() {
             Estás viendo los datos guardados en este navegador. Inicia sesión para consultar y sincronizar la base de datos.
           </p>
         ) : null}
-
-        <Card className="border border-border p-5">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2 text-primary"><FileText size={20} /></div>
-              <div className="min-w-0">
-                <h2 className="text-label-lg font-semibold text-on-surface">CV original guardado</h2>
-                {isLoadingOriginalCV ? (
-                  <p className="text-body-sm text-on-surface-variant">Buscando un archivo guardado...</p>
-                ) : savedOriginalCV ? (
-                  <p className="truncate text-body-sm text-on-surface-variant">
-                    {savedOriginalCV.name} · {formatFileSize(savedOriginalCV.size)} · guardado el {new Date(savedOriginalCV.savedAt).toLocaleDateString('es-CL')}
-                  </p>
-                ) : hasProcessedCV ? (
-                  <p className="text-body-sm text-on-surface-variant">CV importado. No se guardó una copia descargable en este navegador.</p>
-                ) : (
-                  <p className="text-body-sm text-on-surface-variant">Aún no has guardado un CV original en este navegador.</p>
-                )}
-              </div>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              className="shrink-0"
-              onClick={downloadOriginalCV}
-              disabled={!savedOriginalCV}
-            >
-              <span className="flex items-center gap-2"><Download size={16} /> Descargar PDF</span>
-            </Button>
-          </div>
-        </Card>
 
         {/* Sección: Datos Personales */}
         {activeTab === tabs[0] && (
@@ -855,7 +1011,42 @@ export default function PerfilMaestroPage() {
                   <Input type="url" value={personalData.portafolio} onChange={(e) => handlePersonalDataChange('portafolio', e.target.value)} placeholder="https://tuportafolio.cl" />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-label-md font-semibold mb-2 text-on-surface">Resumen profesional</label>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                    <label htmlFor="professional-summary" className="text-label-md font-semibold text-on-surface">
+                      Resumen profesional
+                    </label>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={generateProfessionalSummary}
+                      disabled={isLoadingAI || isGeneratingSummary || !hasApiKey || !selectedModel}
+                    >
+                      <span className="flex items-center gap-2">
+                        {isGeneratingSummary
+                          ? <LoaderCircle size={16} className="animate-spin" />
+                          : <Sparkles size={16} />}
+                        {isGeneratingSummary ? 'Generando resumen...' : 'Generar resumen profesional'}
+                      </span>
+                    </Button>
+                  </div>
+                  {(!isLoadingAI && (!hasApiKey || !selectedModel)) && (
+                    <p className="mb-2 text-body-sm text-on-surface-variant">
+                      Para generar el resumen, primero{' '}
+                      <Link href="/adaptador/modelo?manage=1" className="font-semibold text-primary underline">
+                        configura un modelo de OpenRouter
+                      </Link>.
+                    </p>
+                  )}
+                  {summaryError && (
+                    <p role="alert" className="mb-2 rounded-md border border-error/30 bg-error-container/20 p-3 text-body-sm text-error">
+                      {summaryError}
+                    </p>
+                  )}
+                  {summaryMessage && (
+                    <p role="status" className="mb-2 rounded-md border border-success/30 bg-success-container/30 p-3 text-body-sm text-on-surface">
+                      {summaryMessage}
+                    </p>
+                  )}
                   <textarea value={personalData.resumen} onChange={(e) => handlePersonalDataChange('resumen', e.target.value)} rows={4} maxLength={1200} placeholder="Describe tu experiencia, especialidad y el valor que aportas." className="w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-body-md text-on-surface placeholder:text-on-surface-variant focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
                   <p className="mt-1 text-right text-label-sm text-on-surface-variant">{personalData.resumen.length}/1200</p>
                 </div>
@@ -870,7 +1061,11 @@ export default function PerfilMaestroPage() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-headline-md text-on-surface">Educación</h3>
-              <Button type="button" variant="ghost" className="text-primary" onClick={() => setModal('education')}>+ Añadir Educación</Button>
+              <Button type="button" variant="ghost" className="text-primary" onClick={() => {
+                setEditingEducationId(null);
+                setEducationForm(emptyEducationForm);
+                setModal('education');
+              }}>+ Añadir Educación</Button>
             </div>
             <div className="flex flex-col gap-4">
               {education.map((edu) => (
@@ -887,8 +1082,15 @@ export default function PerfilMaestroPage() {
                     </div>
                   </div>
                   <div className="flex sm:flex-col items-center sm:items-end justify-between gap-3 shrink-0">
-                    <p className="text-label-sm text-on-surface-variant">{edu.startDate} — {edu.endDate}</p>
-                    <button type="button" onClick={() => setEducation((current) => current.filter((item) => item.id !== edu.id))} aria-label={`Eliminar ${edu.degree}`} className="p-2 rounded-button text-on-surface-variant hover:bg-error-container/20 hover:text-error"><Trash2 size={17} /></button>
+                    <p className="text-label-sm text-on-surface-variant">
+                      {edu.startDate ? formatProfileDate(edu.startDate) : 'Sin fecha de inicio'}
+                      {' — '}
+                      {edu.studying || edu.endDate === 'Presente' ? 'Presente' : edu.endDate ? formatProfileDate(edu.endDate) : 'Sin fecha de término'}
+                    </p>
+                    <div className="flex">
+                      <button type="button" onClick={() => openEducationEditor(edu)} aria-label={`Modificar ${edu.degree}`} className="p-2 rounded-button text-on-surface-variant hover:bg-primary/10 hover:text-primary"><Pencil size={17} /></button>
+                      <button type="button" onClick={() => setEducation((current) => current.filter((item) => item.id !== edu.id))} aria-label={`Eliminar ${edu.degree}`} className="p-2 rounded-button text-on-surface-variant hover:bg-error-container/20 hover:text-error"><Trash2 size={17} /></button>
+                    </div>
                   </div>
                 </Card>
               ))}
@@ -930,7 +1132,7 @@ export default function PerfilMaestroPage() {
                         {exp.employmentType && <p className="text-label-sm text-on-surface-variant mt-1">{exp.employmentType}</p>}
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-label-sm text-on-surface-variant">{exp.startDate} — {exp.endDate}</p>
+                        <p className="text-label-sm text-on-surface-variant">{formatProfileDate(exp.startDate)} — {exp.isCurrent || exp.endDate === 'Presente' ? 'Presente' : formatProfileDate(exp.endDate)}</p>
                       </div>
                     </div>
                     <p className="text-body-md text-on-surface mb-4">{exp.description}</p>
@@ -957,16 +1159,17 @@ export default function PerfilMaestroPage() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-headline-md text-on-surface">Habilidades & Keywords</h3>
               <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => { setModal('skills'); setCatalogSearch(''); }}>+ Agregar habilidad</Button>
+                <Button type="button" variant="secondary" onClick={() => { setModal('skills'); setCatalogSearch(''); }}>+ Agregar habilidad técnica o blanda</Button>
                 <Button type="button" variant="ghost" className="text-primary" onClick={() => { setModal('keywords'); setCatalogSearch(''); }}>+ Agregar keyword</Button>
               </div>
             </div>
             <div className="flex flex-col gap-4">
               <Card>
-                <h4 className="text-body-lg font-semibold text-on-surface mb-4">Habilidades técnicas <span className="text-label-sm font-normal text-on-surface-variant">({skills.length})</span></h4>
+                <h4 className="text-body-lg font-semibold text-on-surface mb-2">Habilidades técnicas y blandas <span className="text-label-sm font-normal text-on-surface-variant">({skills.length})</span></h4>
+                <p className="text-body-sm text-on-surface-variant mb-4">Elige las que realmente tienes o agrega cualquier habilidad manualmente. El catálogo incluye competencias de distintas áreas profesionales.</p>
                 <div className="flex flex-wrap gap-2">
                   {skills.map((skill) => <button key={skill} type="button" onClick={() => setSkills((current) => current.filter((item) => item !== skill))} className="inline-flex items-center gap-2 rounded-pill bg-primary-container px-3 py-1.5 text-label-sm text-on-primary-container hover:bg-error-container/30" aria-label={`Quitar habilidad ${skill}`}>{skill}<X size={14} /></button>)}
-                  {skills.length === 0 && <p className="text-body-md text-on-surface-variant">Selecciona las tecnologías y herramientas que dominas.</p>}
+                  {skills.length === 0 && <p className="text-body-md text-on-surface-variant">Agrega competencias técnicas o blandas que realmente tengas.</p>}
                 </div>
               </Card>
               <Card>
@@ -1033,13 +1236,13 @@ export default function PerfilMaestroPage() {
             <header className="flex items-start justify-between gap-4 border-b border-border bg-surface-container-low px-6 py-5">
               <div>
                 <h2 id="profile-modal-title" className="text-headline-sm text-on-surface">
-                  {modal === 'education' ? 'Añadir educación' : modal === 'experience' ? editingExperienceId ? 'Editar experiencia laboral' : 'Añadir experiencia laboral' : modal === 'skills' ? 'Agregar habilidades técnicas' : 'Agregar keywords profesionales'}
+                  {modal === 'education' ? editingEducationId ? 'Modificar educación' : 'Añadir educación' : modal === 'experience' ? editingExperienceId ? 'Editar experiencia laboral' : 'Añadir experiencia laboral' : modal === 'skills' ? 'Agregar habilidades' : 'Agregar keywords profesionales'}
                 </h2>
                 <p className="mt-1 text-body-sm text-on-surface-variant">
-                  {modal === 'education' ? 'Completa los datos de tu formación académica.' : modal === 'experience' ? 'Registra un cargo y sus principales responsabilidades.' : 'Busca en el catálogo o agrega un término propio.'}
+                  {modal === 'education' ? 'Completa los datos de tu formación académica.' : modal === 'experience' ? 'Registra un cargo y sus principales responsabilidades.' : modal === 'skills' ? 'Selecciona competencias técnicas o blandas de cualquier área, o agrega una propia.' : 'Busca en el catálogo o agrega un término propio.'}
                 </p>
               </div>
-              <button type="button" onClick={() => { setModal(null); setEditingExperienceId(null); }} aria-label="Cerrar" className="rounded-button p-2 text-on-surface-variant hover:bg-surface-container"><X size={20} /></button>
+              <button type="button" onClick={() => { setModal(null); setEditingEducationId(null); setEditingExperienceId(null); }} aria-label="Cerrar" className="rounded-button p-2 text-on-surface-variant hover:bg-surface-container"><X size={20} /></button>
             </header>
 
             {modal === 'education' && (
@@ -1047,15 +1250,15 @@ export default function PerfilMaestroPage() {
                 <div className="grid gap-4 overflow-y-auto p-6 sm:grid-cols-2">
                   <label className="text-label-md text-on-surface">Título o programa<Input required value={educationForm.degree} onChange={(e) => setEducationForm((current) => ({ ...current, degree: e.target.value }))} placeholder="Ingeniería Civil Informática" /></label>
                   <label className="text-label-md text-on-surface">Institución<Input required value={educationForm.institution} onChange={(e) => setEducationForm((current) => ({ ...current, institution: e.target.value }))} placeholder="Universidad o centro de estudios" /></label>
-                  <label className="text-label-md text-on-surface">Fecha de inicio<Input required type="month" value={educationForm.startDate} onChange={(e) => setEducationForm((current) => ({ ...current, startDate: e.target.value }))} /></label>
-                  <label className="text-label-md text-on-surface">Fecha de término<Input required={!educationForm.studying} disabled={educationForm.studying} type="month" value={educationForm.endDate} onChange={(e) => setEducationForm((current) => ({ ...current, endDate: e.target.value }))} /></label>
-                  <label className="text-label-md text-on-surface">Modalidad<select value={educationForm.studyMode} onChange={(e) => setEducationForm((current) => ({ ...current, studyMode: e.target.value }))} className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-on-surface"><option>Presencial</option><option>Híbrida</option><option>En línea</option></select></label>
+                  <label className="text-label-md text-on-surface">Fecha de inicio (mes/año)<Input type="month" value={educationForm.startDate} onChange={(e) => setEducationForm((current) => ({ ...current, startDate: e.target.value }))} /></label>
+                  <label className="text-label-md text-on-surface">Fecha de término (mes/año)<Input disabled={educationForm.studying} type="month" value={educationForm.endDate} onChange={(e) => setEducationForm((current) => ({ ...current, endDate: e.target.value }))} /></label>
+                  <label className="text-label-md text-on-surface">Modalidad<select value={educationForm.studyMode} onChange={(e) => setEducationForm((current) => ({ ...current, studyMode: e.target.value }))} className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-on-surface"><option value="">No especificada</option><option>Presencial</option><option>Híbrida</option><option>En línea</option></select></label>
                   <label className="text-label-md text-on-surface">Ciudad o país<Input value={educationForm.location} onChange={(e) => setEducationForm((current) => ({ ...current, location: e.target.value }))} placeholder="Santiago, Chile" /></label>
                   <label className="sm:col-span-2 flex items-center gap-3 text-body-md text-on-surface"><input type="checkbox" checked={educationForm.studying} onChange={(e) => setEducationForm((current) => ({ ...current, studying: e.target.checked }))} className="accent-primary" />Actualmente estudiando</label>
                   <label className="sm:col-span-2 text-label-md text-on-surface">Especialidades o asignaturas, separadas por coma<Input value={educationForm.tags} onChange={(e) => setEducationForm((current) => ({ ...current, tags: e.target.value }))} placeholder="Desarrollo de software, bases de datos" /></label>
                   <label className="sm:col-span-2 text-label-md text-on-surface">Descripción<textarea rows={3} value={educationForm.description} onChange={(e) => setEducationForm((current) => ({ ...current, description: e.target.value }))} placeholder="Proyectos, reconocimientos o contenidos relevantes" className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-body-md text-on-surface focus:border-primary focus:outline-none" /></label>
                 </div>
-                <div className="flex justify-end gap-3 border-t border-border bg-surface-container-low p-5"><Button type="button" variant="secondary" onClick={() => setModal(null)}>Cancelar</Button><Button type="submit">Agregar educación</Button></div>
+                <div className="flex justify-end gap-3 border-t border-border bg-surface-container-low p-5"><Button type="button" variant="secondary" onClick={() => { setModal(null); setEditingEducationId(null); }}>Cancelar</Button><Button type="submit">{editingEducationId ? 'Guardar cambios' : 'Agregar educación'}</Button></div>
               </form>
             )}
 
@@ -1064,8 +1267,8 @@ export default function PerfilMaestroPage() {
                 <div className="grid gap-4 overflow-y-auto p-6 sm:grid-cols-2">
                   <label className="text-label-md text-on-surface">Cargo<Input required value={experienceForm.role} onChange={(e) => setExperienceForm((current) => ({ ...current, role: e.target.value }))} placeholder="Desarrollador/a Full Stack" /></label>
                   <label className="text-label-md text-on-surface">Empresa<Input required value={experienceForm.company} onChange={(e) => setExperienceForm((current) => ({ ...current, company: e.target.value }))} placeholder="Nombre de la organización" /></label>
-                  <label className="text-label-md text-on-surface">Fecha de inicio<Input required type="month" value={experienceForm.startDate} onChange={(e) => setExperienceForm((current) => ({ ...current, startDate: e.target.value }))} /></label>
-                  <label className="text-label-md text-on-surface">Fecha de término<Input required={!experienceForm.isCurrent} disabled={experienceForm.isCurrent} type="month" value={experienceForm.endDate} onChange={(e) => setExperienceForm((current) => ({ ...current, endDate: e.target.value }))} /></label>
+                  <label className="text-label-md text-on-surface">Fecha de inicio (mes/año)<Input type="month" value={experienceForm.startDate} onChange={(e) => setExperienceForm((current) => ({ ...current, startDate: e.target.value }))} /></label>
+                  <label className="text-label-md text-on-surface">Fecha de término (mes/año)<Input disabled={experienceForm.isCurrent} type="month" value={experienceForm.endDate} onChange={(e) => setExperienceForm((current) => ({ ...current, endDate: e.target.value }))} /></label>
                   <label className="text-label-md text-on-surface">Tipo de jornada<select value={experienceForm.employmentType} onChange={(e) => setExperienceForm((current) => ({ ...current, employmentType: e.target.value }))} className="mt-2 w-full rounded-input border border-border bg-surface-container-low px-4 py-3 text-on-surface"><option>Jornada completa</option><option>Media jornada</option><option>Contrato</option><option>Freelance</option><option>Práctica profesional</option></select></label>
                   <label className="text-label-md text-on-surface">Ubicación o modalidad<Input value={experienceForm.location} onChange={(e) => setExperienceForm((current) => ({ ...current, location: e.target.value }))} placeholder="Santiago · Híbrido" /></label>
                   <label className="sm:col-span-2 flex items-center gap-3 text-body-md text-on-surface"><input type="checkbox" checked={experienceForm.isCurrent} onChange={(e) => setExperienceForm((current) => ({ ...current, isCurrent: e.target.checked }))} className="accent-primary" />Trabajo actualmente aquí</label>
@@ -1115,8 +1318,8 @@ export default function PerfilMaestroPage() {
                 </div>
                 <h3 className="mb-2 text-center text-headline-sm text-on-surface">¿Borrar información del perfil?</h3>
                 <p className="mb-6 text-center text-body-md text-on-surface-variant">
-                  Se eliminarán educación, experiencia laboral, habilidades, keywords, pretensiones salariales, resumen profesional, campos complementarios y la copia local del CV. <br/><br/>
-                  <span className="font-semibold text-on-surface">Nombre, RUT, correo y teléfono se conservarán. El borrado también se sincronizará con el servidor.</span>
+                  Se eliminarán de la base de datos educación, experiencia, habilidades y pretensiones salariales. Del navegador se quitarán keywords, resumen profesional, campos complementarios y la copia local del CV. <br/><br/>
+                  <span className="font-semibold text-on-surface">Nombre, RUT, correo, teléfono, foto de perfil y conexión de OpenRouter se conservarán. El borrado de los datos curriculares se sincronizará con Supabase.</span>
                 </p>
                 <div className="flex justify-center gap-3">
                   <Button type="button" variant="secondary" onClick={() => setModal(null)}>Cancelar</Button>

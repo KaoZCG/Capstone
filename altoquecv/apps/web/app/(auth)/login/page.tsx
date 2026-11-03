@@ -7,26 +7,22 @@ import { LoginForm } from './components/login-form';
 import { LoginCredentials } from '@/types';
 
 interface LoginPageProps {
-  searchParams?: { redirect?: string; verified?: string };
+  searchParams?: { verified?: string };
 }
 
 export default function LoginPage({ searchParams }: LoginPageProps) {
   const { login, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
-  const requestedRedirect = searchParams?.redirect;
-  const redirectTo = requestedRedirect?.startsWith('/') && !requestedRedirect.startsWith('//')
-    ? requestedRedirect
-    : '/dashboard';
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace(redirectTo);
+      router.replace('/dashboard');
     }
-  }, [isAuthenticated, isLoading, redirectTo, router]);
+  }, [isAuthenticated, isLoading, router]);
 
   const handleLogin = async (credentials: LoginCredentials) => {
     await login(credentials);
-    router.replace(redirectTo);
+    router.replace('/dashboard');
   };
 
   if (isAuthenticated) return null;

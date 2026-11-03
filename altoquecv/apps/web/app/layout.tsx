@@ -3,6 +3,7 @@ import { Montserrat, Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { AuthProvider } from '@/hooks/use-auth';
+import { AIModelProvider } from '@/hooks/use-ai-model';
 import { ThemeProvider } from '@/components/layout/ThemeProvider';
 
 const montserrat = Montserrat({
@@ -27,7 +28,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="es" suppressHydrationWarning className={`${montserrat.variable} ${inter.variable}`}>
       <body className="bg-surface text-on-surface antialiased min-h-screen">
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <AIModelProvider>{children}</AIModelProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

@@ -39,18 +39,20 @@ export function CVPreview({ cv }: { cv: CV }) {
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 mb-3 border-b border-slate-300 pb-1">Experiencia Laboral</h2>
         <div className="space-y-4">
           {experienciasOrdenadas.map((exp, idx) => (
-            <div key={`${exp.empresa}-${exp.cargo}-${idx}`} className="break-inside-avoid">
-              <div className="flex justify-between items-baseline mb-1">
+            <article key={`${exp.empresa}-${exp.cargo}-${idx}`} className="cv-experience-item mb-4 break-inside-avoid">
+              <div className="mb-1">
                 <h3 className="text-md font-bold text-slate-900">{exp.cargo}</h3>
-                <span className="text-xs text-slate-500 font-mono">
-                  {exp.fechaInicio.match(/(?:19|20)\d{2}/)?.[0] ?? ''}
-                  {exp.fechaFin ? ` - ${exp.fechaFin.match(/(?:19|20)\d{2}/)?.[0] ?? exp.fechaFin}` : exp.fechaInicio ? ' - Presente' : ''}
-                </span>
               </div>
-              <p className="text-sm font-medium text-slate-700 mb-2">{exp.empresa}</p>
+              {exp.empresa && <p className="cv-experience-company text-sm font-medium text-slate-700">Empresa: {exp.empresa}</p>}
+              {(exp.fechaInicio || exp.fechaFin) && (
+                <p className="cv-experience-period text-xs text-slate-500 font-mono">
+                  Periodo: {exp.fechaInicio.match(/(?:19|20)\d{2}/)?.[0] ?? ''}
+                  {exp.fechaFin ? ` - ${exp.fechaFin.match(/(?:19|20)\d{2}/)?.[0] ?? exp.fechaFin}` : exp.fechaInicio ? ' - Presente' : ''}
+                </p>
+              )}
               {exp.descripcion && <p className="mb-2 whitespace-pre-line text-sm leading-relaxed text-slate-600">{exp.descripcion}</p>}
               {exp.habilidades.length > 0 && <p className="text-xs text-slate-600"><span className="font-semibold">Herramientas:</span> {exp.habilidades.join(', ')}</p>}
-            </div>
+            </article>
           ))}
         </div>
       </section>
@@ -59,13 +61,13 @@ export function CVPreview({ cv }: { cv: CV }) {
       <section className="mb-6">
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 mb-3 border-b border-slate-300 pb-1">Educación</h2>
         {estudiosOrdenados.map((edu, idx) => (
-          <div key={`${edu.institución}-${edu.grado}-${idx}`} className="mb-2 flex justify-between items-baseline break-inside-avoid">
+          <article key={`${edu.institución}-${edu.grado}-${idx}`} className="cv-education-item mb-3 break-inside-avoid">
             <div>
               <h3 className="text-sm font-bold text-slate-900">{edu.grado}</h3>
-              <p className="text-sm text-slate-700">{edu.institución}</p>
+              {edu.institución && <p className="cv-education-institution text-sm text-slate-700">Institución: {edu.institución}</p>}
             </div>
-            {edu.año > 0 && <span className="text-xs text-slate-500 font-mono">{edu.año}</span>}
-          </div>
+            {edu.año > 0 && <p className="cv-education-year text-xs text-slate-500 font-mono">Año: {edu.año}</p>}
+          </article>
         ))}
       </section>
 

@@ -14,6 +14,12 @@ export interface ProfileData {
   first_name: string;
   last_name: string;
   phone: string | null;
+  cargo_objetivo: string;
+  region: string;
+  comuna: string;
+  linkedin: string;
+  portafolio: string;
+  resumen_profesional: string;
   education: Education[];
   experience: Experience[];
   skills: string[];

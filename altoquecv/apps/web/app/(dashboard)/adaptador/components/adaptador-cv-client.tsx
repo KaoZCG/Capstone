@@ -1,13 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, Download, LoaderCircle, RotateCcw, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { AlertCircle, CheckCircle2, Download, KeyRound, LoaderCircle, RotateCcw, Sparkles } from 'lucide-react';
 import { ATSScoreGauge } from './ats-score-gauge';
 import { CVEditor } from './cv-editor';
 import { CVPreview } from './cv-preview';
 import { KeywordAnalyzer } from './keyword-analyzer';
 import { useCVAnalyzer } from '@/hooks/use-cv-analyzer';
 import { useAuth } from '@/hooks/use-auth';
+import { useAIModel } from '@/hooks/use-ai-model';
 import { CV } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
@@ -54,8 +57,15 @@ function startYear(value: string): number {
 }
 
 export default function AdaptadorCVClient() {
+  const router = useRouter();
   const { cv, isLoading, updateCV, resetCV } = useCVAnalyzer();
   const { accessToken } = useAuth();
+  const {
+    hasApiKey,
+    selectedModel,
+    isLoading: isLoadingProvider,
+    error: aiSettingsError,
+  } = useAIModel();
   const [cargo, setCargo] = useState('');
   const [empresa, setEmpresa] = useState('');
   const [descripcionOferta, setDescripcionOferta] = useState('');
@@ -63,6 +73,12 @@ export default function AdaptadorCVClient() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    if (!isLoadingProvider && !aiSettingsError && (!hasApiKey || !selectedModel)) {
+      router.replace('/adaptador/modelo');
+    }
+  }, [aiSettingsError, hasApiKey, isLoadingProvider, router, selectedModel]);
 
   useEffect(() => {
     if (isLoading || !cv || contextInitialized) return;
@@ -110,6 +126,14 @@ export default function AdaptadorCVClient() {
     }
     if (!accessToken) {
       setErrorMessage('Tu sesión expiró. Vuelve a iniciar sesión para usar la IA.');
+      return;
+    }
+    if (isLoadingProvider || aiSettingsError) {
+      setErrorMessage(aiSettingsError || 'Espera a que se cargue la configuración del modelo de IA.');
+      return;
+    }
+    if (!selectedModel || !hasApiKey) {
+      setErrorMessage('Conecta tu API key y selecciona un modelo de OpenRouter antes de adaptar el CV.');
       return;
     }
 
@@ -187,7 +211,7 @@ export default function AdaptadorCVClient() {
           ...cv.habilidades.filter((skill) => !preferredSkillNames.has(normalizeText(skill.nombre))),
         ],
       });
-      setSuccessMessage('CV adaptado y guardado en este navegador. Revisa el contenido antes de descargarlo.');
+      setSuccessMessage(`CV adaptado con ${selectedModel.name} y guardado en este navegador. Revisa el contenido antes de descargarlo.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'No se pudo adaptar el CV.');
     } finally {
@@ -204,8 +228,39 @@ export default function AdaptadorCVClient() {
       <div className="mx-auto max-w-2xl rounded-container border border-border bg-surface-container-lowest p-8 text-center">
         <h1 className="text-headline-md font-semibold text-on-surface">No encontramos tu CV</h1>
         <p className="mt-2 text-body-md text-on-surface-variant">Completa tu Perfil Maestro para crear un CV editable y adaptarlo al cargo que buscas.</p>
-        <a className="mt-5 inline-flex rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white" href="/perfil-maestro">Ir al Perfil Maestro</a>
+        <a className="mt-5 inline-flex rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary" href="/perfil-maestro">Ir al Perfil Maestro</a>
       </div>
+    );
+  }
+
+  if (isLoadingProvider) {
+    return (
+      <main className="mx-auto max-w-3xl rounded-container border border-border bg-surface-container-lowest p-6 text-on-surface">
+        <p role="status">Comprobando tu modelo de IA...</p>
+      </main>
+    );
+  }
+
+  if (aiSettingsError) {
+    return (
+      <main className="mx-auto max-w-3xl space-y-3 rounded-container border border-border bg-surface-container-lowest p-6">
+        <p role="alert" className="text-error">{aiSettingsError}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="font-semibold text-primary underline"
+        >
+          Volver a comprobar la conexión
+        </button>
+      </main>
+    );
+  }
+
+  if (!hasApiKey || !selectedModel) {
+    return (
+      <main className="mx-auto max-w-3xl rounded-container border border-border bg-surface-container-lowest p-6 text-on-surface">
+        <p role="status">Para usar el Adaptador de CV, primero conecta y selecciona un modelo de IA. Redirigiendo...</p>
+      </main>
     );
   }
 
@@ -219,14 +274,49 @@ export default function AdaptadorCVClient() {
           <p className="mt-1 text-body-md text-on-surface-variant">Crea un CV estilo Harvard, editable y legible por sistemas ATS.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <span className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium text-on-surface">
+            <Sparkles size={16} /> {selectedModel.name}
+          </span>
           <button type="button" onClick={resetCV} className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-low">
             <RotateCcw size={16} /> Restaurar Perfil Maestro
           </button>
-          <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white hover:opacity-90">
+          <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:opacity-90">
             <Download size={16} /> Descargar / imprimir PDF
           </button>
         </div>
       </header>
+
+      <section className="flex flex-col gap-4 rounded-container border border-primary/30 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div className="flex items-start gap-3">
+          <span className="rounded-full bg-primary/10 p-2 text-primary">
+            <Sparkles size={20} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-label-sm font-semibold uppercase tracking-wide text-on-surface-variant">
+              Modelo de IA para tu CV
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className="text-headline-sm font-semibold text-on-surface">
+                {selectedModel?.name ?? 'OpenRouter'}
+              </h2>
+              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                !hasApiKey || !selectedModel
+                  ? 'bg-warning-container text-on-warning-container'
+                  : 'bg-success text-on-success'
+              }`}>
+                {!hasApiKey || !selectedModel
+                  ? 'Falta configurar'
+                  : 'Seleccionado'}
+              </span>
+            </div>
+            <p className="mt-1 text-body-sm text-on-surface-variant">
+              {selectedModel
+                ? `La generación usará este modelo de OpenRouter${hasApiKey ? '.' : '; conecta tu API key.'}`
+                : 'Conecta tu API key y elige un modelo antes de generar el CV.'}
+            </p>
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-container border border-border bg-surface-container-lowest p-5 sm:p-6">
         <div className="mb-4">
@@ -248,7 +338,7 @@ export default function AdaptadorCVClient() {
           </label>
         </div>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <button type="button" onClick={handleGenerateCV} disabled={isGenerating} className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">
+          <button type="button" onClick={handleGenerateCV} disabled={isGenerating} className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">
             {isGenerating ? <LoaderCircle className="animate-spin" size={17} /> : <Sparkles size={17} />}
             {isGenerating ? 'Creando CV para este cargo...' : 'Crear CV Harvard con IA'}
           </button>
@@ -276,6 +366,19 @@ export default function AdaptadorCVClient() {
           <CVEditor cv={cv} onChange={updateCV} />
         </div>
       </div>
+
+      <footer className="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-label-sm text-on-surface-variant">
+          La configuración actual de OpenRouter está activa. Cambiarla puede afectar las próximas solicitudes de IA.
+        </p>
+        <Link
+          href="/adaptador/modelo?manage=1"
+          className="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-md border border-error/50 bg-error-container/20 px-4 py-2.5 text-sm font-semibold text-error transition hover:bg-error-container/40 focus:outline-none focus:ring-2 focus:ring-error focus:ring-offset-2 sm:self-auto"
+        >
+          <KeyRound size={16} aria-hidden="true" />
+          Cambiar API key o modelo de IA
+        </Link>
+      </footer>
     </div>
   );
 }

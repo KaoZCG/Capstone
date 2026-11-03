@@ -9,6 +9,25 @@ export const config: PlasmoCSConfig = {
 const AUTH_STORAGE_KEY = "altoquecv_auth_session";
 const PROFILE_STORAGE_KEY = "altoquecv-profile";
 
+window.addEventListener("altoquecv:ai-model-updated", (event) => {
+  const detail = (event as CustomEvent<{
+    modelId?: string | null;
+  }>).detail;
+  if (!detail || (detail.modelId !== null && typeof detail.modelId !== "string")) return;
+
+  void chrome.runtime.sendMessage({
+    type: "ALTOQUE_CONFIGURAR_MODELO_IA",
+    modelId: detail.modelId ?? null,
+  }).catch((error: unknown) => console.info("AltoqueCV: No se pudo sincronizar el modelo de IA con la extensión.", error));
+});
+
+window.addEventListener("pagehide", () => {
+  void chrome.runtime.sendMessage({
+    type: "ALTOQUE_CONFIGURAR_MODELO_IA",
+    modelId: null,
+  }).catch((error: unknown) => console.info("AltoqueCV: No se pudo limpiar el modelo de IA de la extensión.", error));
+});
+
 const syncProfileToExtension = () => {
   try {
     const authRaw = window.localStorage.getItem(AUTH_STORAGE_KEY);

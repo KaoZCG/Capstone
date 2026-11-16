@@ -46,6 +46,11 @@ de guardarse; solo
 el backend la descifra y la envía a OpenRouter. Nunca se devuelve al navegador,
 se incluye en logs ni se conserva en el almacenamiento de la extensión.
 
+Si Supabase devuelve que no encuentra `public.credenciales_proveedores_ia`,
+ejecuta `migrations/202611150002_create_ai_provider_credentials.sql` en el SQL
+Editor del proyecto. El backend usa la clave de servicio para acceder a la tabla;
+RLS permanece habilitado para impedir el acceso directo desde clientes.
+
 Configura `AI_CREDENTIALS_ENCRYPTION_KEY` en el entorno del backend. Genera una
 clave una sola vez con `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`,
 guárdala como secreto y mantenla estable e idéntica en cada instancia de backend

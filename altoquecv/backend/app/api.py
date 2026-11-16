@@ -8,7 +8,7 @@ import time
 import unicodedata
 from datetime import date
 from collections.abc import AsyncIterator
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 from typing import Any, Literal
 
 from app.core.config import Settings, get_settings
@@ -42,10 +42,13 @@ from app.schemas.data import (
     ProfileResponse,
 )
 from app.services.ai_credentials import AICredentialEncryptionError, decrypt_api_key, encrypt_api_key
+from app.services.login_rate_limit import LoginAttemptLimiter
 from app.services.supabase_auth import AuthServiceError, SupabaseAuthService
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 logger = logging.getLogger(__name__)
+_login_attempt_limiter = LoginAttemptLimiter()
+_MAX_CV_BYTES = 5 * 1024 * 1024
 _AI_PROFILE_CACHE: dict[str, tuple[float, ProfileResponse]] = {}
 _AI_PROFILE_CACHE_TTL_SECONDS = 120.0
 
@@ -533,6 +536,11 @@ async def authenticated_user(
     try:
         return await service.current_user(access_token)
     except AuthServiceError as error:
+        if error.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="La sesión es inválida o expiró. Inicia sesión nuevamente.",
+            ) from error
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 async def get_auth_service(
@@ -546,7 +554,12 @@ async def register(payload: PasswordConfirmationRequest, service: SupabaseAuthSe
     try:
         return await service.register(payload)
     except AuthServiceError as error:
-        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        detail = str(error)
+        if error.status_code == 429:
+            detail = "Se alcanzó el límite de correos. Espera unos minutos antes de volver a intentarlo."
+        elif error.status_code >= 500:
+            detail = "No fue posible crear la cuenta. Inténtalo nuevamente más tarde."
+        raise HTTPException(status_code=error.status_code, detail=detail) from error
     except httpx.RequestError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -554,12 +567,33 @@ async def register(payload: PasswordConfirmationRequest, service: SupabaseAuthSe
         ) from error
 
 @router.post("/login", response_model=AuthResponse)
-async def login(payload: LoginRequest, service: SupabaseAuthService = Depends(get_auth_service)) -> AuthResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    service: SupabaseAuthService = Depends(get_auth_service),
+) -> AuthResponse:
+    ip_address = request.client.host if request.client else "unknown"
+    await _login_attempt_limiter.check(ip_address, payload.email)
     try:
-        return await service.login(payload)
+        result = await service.login(payload)
+        await _login_attempt_limiter.clear_identifier(ip_address, payload.email)
+        return result
     except AuthServiceError as error:
         if error.status_code == 401:
+            await _login_attempt_limiter.record_failure(ip_address, payload.email)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Correo o contraseña incorrectos") from error
+        if error.status_code == 403 and "verific" in str(error).lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Correo no verificado") from error
+        if error.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="La cuenta no está habilitada para iniciar sesión.",
+            ) from error
+        if error.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="No fue posible iniciar sesión. Inténtalo nuevamente más tarde.",
+            ) from error
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except httpx.RequestError as error:
         raise HTTPException(
@@ -1658,6 +1692,8 @@ async def procesar_cv_pdf(
 ):
     logger.info("Receiving CV upload")
     user = await authenticated_user(authorization, service)
+    if cv_file.content_type != "application/pdf":
+        raise HTTPException(status_code=415, detail="El archivo debe ser un PDF.")
     selected_provider, selected_model_id, openrouter_api_key = await _selected_ai_provider(
         user.user_id,
         service,
@@ -1665,14 +1701,26 @@ async def procesar_cv_pdf(
     )
 
     try:
-        contenido = await cv_file.read()
+        contenido = await cv_file.read(_MAX_CV_BYTES + 1)
+        if len(contenido) > _MAX_CV_BYTES:
+            raise HTTPException(status_code=413, detail="El PDF no puede superar los 5 MB.")
+        if not contenido.startswith(b"%PDF-"):
+            raise HTTPException(status_code=415, detail="El archivo no contiene un PDF válido.")
         texto_cv = extraer_texto_pdf(contenido)
         texto_cv = re.sub(r"[ \t]+", " ", texto_cv).strip()
+    except HTTPException:
+        raise
     except Exception:
-        return {"exito": False, "error": "Error al leer PDF."}
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo leer el PDF. Comprueba que el archivo no esté dañado.",
+        ) from None
 
     if not texto_cv:
-        return {"exito": False, "error": "No se pudo extraer texto del PDF. Si es un documento escaneado, necesita OCR."}
+        raise HTTPException(
+            status_code=422,
+            detail="No se pudo extraer texto del PDF. Si es un documento escaneado, necesita OCR.",
+        )
 
     try:
         timeout = httpx.Timeout(900.0, connect=10.0)
@@ -1934,8 +1982,8 @@ async def _verify_openrouter_model(api_key: str, model_id: str) -> None:
                 headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
                 json={
                     "model": model_id,
-                    "messages": [{"role": "user", "content": "Responde brevemente para confirmar que estás disponible."}],
-                    "max_tokens": 32,
+                    "messages": [{"role": "user", "content": "Responde únicamente: OK."}],
+                    "max_tokens": 256,
                     "temperature": 0,
                 },
             )

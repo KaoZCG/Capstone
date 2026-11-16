@@ -27,7 +27,12 @@ class ProfileResponse(BaseModel):
 
 
 class PostulacionStatusRequest(BaseModel):
-    status: str
+    status: Literal[
+        "postulada",
+        "cv-en-revision",
+        "entrevista-agendada",
+        "oferta-negociacion",
+    ]
 
 
 class PostulacionCreateRequest(BaseModel):

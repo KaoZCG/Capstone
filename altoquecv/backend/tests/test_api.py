@@ -450,7 +450,7 @@ Ingeniería en Informática Enero 2018 - Diciembre 2021
     response = client.post(
         "/api/v1/auth/ia/procesar-cv",
         headers={"Authorization": "Bearer valid-session-token"},
-        files={"cv_file": ("cv-academico.pdf", b"mocked pdf bytes", "application/pdf")},
+        files={"cv_file": ("cv-academico.pdf", b"%PDF-1.4\nmocked pdf bytes", "application/pdf")},
     )
 
     assert response.status_code == 200
@@ -549,7 +549,7 @@ Analista de datos.
     response = client.post(
         "/api/v1/auth/ia/procesar-cv",
         headers={"Authorization": "Bearer valid-session-token"},
-        files={"cv_file": ("cv-experiencia.pdf", b"mocked pdf bytes", "application/pdf")},
+        files={"cv_file": ("cv-experiencia.pdf", b"%PDF-1.4\nmocked pdf bytes", "application/pdf")},
     )
 
     assert response.status_code == 200
@@ -650,7 +650,7 @@ Coordiné inventario, mejoré procesos y gestioné reportes.
     response = client.post(
         "/api/v1/auth/ia/procesar-cv",
         headers={"Authorization": "Bearer valid-session-token"},
-        files={"cv_file": ("cv-largo.pdf", b"mocked pdf bytes", "application/pdf")},
+        files={"cv_file": ("cv-largo.pdf", b"%PDF-1.4\nmocked pdf bytes", "application/pdf")},
     )
 
     assert response.status_code == 200
@@ -729,7 +729,7 @@ REFERENCIAS
         response = client.post(
             "/api/v1/auth/ia/procesar-cv",
             headers={"Authorization": "Bearer valid-session-token"},
-            files={"cv_file": ("CV-SEGOVIA.pdf", b"mocked pdf bytes", "application/pdf")},
+            files={"cv_file": ("CV-SEGOVIA.pdf", b"%PDF-1.4\nmocked pdf bytes", "application/pdf")},
         )
     finally:
         app.dependency_overrides.clear()
@@ -824,6 +824,99 @@ def test_current_user_requires_bearer_token() -> None:
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Token requerido"}
+
+
+def test_current_user_hides_supabase_token_errors() -> None:
+    class InvalidTokenService:
+        async def current_user(self, access_token: str) -> None:
+            raise AuthServiceError("JWT signature verification failed: internal detail", 403)
+
+    async def override_auth_service():
+        yield InvalidTokenService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert "JWT" not in response.text
+
+
+def test_registration_validation_does_not_return_password() -> None:
+    secret = "weakpassword123"
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "person@example.com",
+            "password": secret,
+            "password_confirmation": secret,
+            "nombre": "Persona Ejemplo",
+            "rut": "12.345.678-5",
+            "telefono": "+56912345678",
+            "acepto_terminos": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert '"input"' not in response.text
+
+
+def test_cors_rejects_unconfigured_origins() -> None:
+    response = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_login_rate_limit_blocks_repeated_invalid_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    class InvalidCredentialsService:
+        async def login(self, payload: object) -> None:
+            raise AuthServiceError("invalid login", 401)
+
+    async def override_auth_service():
+        yield InvalidCredentialsService()
+
+    monkeypatch.setattr(api, "_login_attempt_limiter", api.LoginAttemptLimiter(1, 60, 10))
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        payload = {"email": "rate-limit@example.com", "password": "WrongPassword123"}
+        first = client.post("/api/v1/auth/login", json=payload)
+        second = client.post("/api/v1/auth/login", json=payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+    assert second.headers["retry-after"]
+
+
+def test_postulacion_rejects_unknown_status() -> None:
+    response = client.patch(
+        "/api/v1/auth/postulaciones/postulacion-123",
+        json={"status": "estado-invalido"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_chilean_rut_login_identifier_is_normalized() -> None:
+    from app.schemas.auth import LoginRequest
+
+    request = LoginRequest(email="123456785", password="Password123")
+
+    assert request.email == "12.345.678-5"
 
 
 def test_autocomplete_uses_authenticated_database_profile_and_limits_answer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1576,6 +1669,657 @@ Año: 2023
     class OpenRouterResponse:
         is_error = False
 
+        async def sync_profile(self, user_id: str, payload: object) -> None:
+            synchronized.append((user_id, payload))
+
+        async def profile(self, user_id: str) -> ProfileResponse:
+            return ProfileResponse(
+                user_id=user_id,
+                email="marcela@example.com",
+                account_status="activo",
+                rut="12.345.678-5",
+                first_name="Marcela",
+                last_name="Segovia",
+                phone=None,
+            )
+
+    async def override_auth_service():
+        yield ProfileSyncService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.put(
+            "/api/v1/auth/profile",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={"experience": [{"role": "Desarrolladora", "company": "BLACK AI SPA"}], "skills": ["Python"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert synchronized[0][0] == "user-123"
+
+
+def test_login_returns_401_for_invalid_credentials() -> None:
+    """Normaliza un fallo del proveedor al contrato de la HU de login."""
+    class InvalidCredentialsService:
+        async def login(self, payload: object) -> None:
+            raise AuthServiceError("invalid login", status_code=401)
+
+    async def override_auth_service():
+        yield InvalidCredentialsService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "persona@example.com", "password": "Wrong123"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Correo o contraseña incorrectos"}
+
+
+def test_login_returns_service_unavailable_when_supabase_cannot_be_reached() -> None:
+    class UnavailableSupabaseService:
+        async def login(self, payload: object) -> None:
+            raise httpx.ConnectError("Supabase connection failed")
+
+    async def override_auth_service():
+        yield UnavailableSupabaseService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.post(
+            "/api/v1/auth/login",
+            headers={"Origin": "http://localhost:3000"},
+            json={"email": "persona@example.com", "password": "Password123"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "No fue posible conectar con Supabase. Verifica la conectividad del backend e intenta nuevamente."
+    }
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_refresh_endpoint_returns_rotated_session_tokens() -> None:
+    class RefreshSessionService:
+        async def refresh_session(self, payload: RefreshTokenRequest) -> AuthResponse:
+            assert payload.refresh_token.get_secret_value() == "old-refresh-token"
+            return AuthResponse(
+                access_token="new-access-token",
+                refresh_token="new-refresh-token",
+                expires_in=3600,
+                user_id="user-123",
+                email="person@example.com",
+            )
+
+    async def override_auth_service():
+        yield RefreshSessionService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": "old-refresh-token"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["access_token"] == "new-access-token"
+    assert response.json()["refresh_token"] == "new-refresh-token"
+
+
+def test_openrouter_model_catalog_only_returns_free_text_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    class OpenRouterResponse:
+        status_code = 200
+        is_error = False
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"data": [
+                {
+                    "id": "provider/free-model:free",
+                    "name": "Free model",
+                    "context_length": 32768,
+                    "pricing": {"prompt": "0", "completion": 0.0},
+                },
+                {
+                    "id": "provider/paid-model",
+                    "name": "Paid model",
+                    "pricing": {"prompt": "0.1", "completion": "0.2"},
+                },
+                {
+                    "id": "provider/inconsistent:free",
+                    "name": "Inconsistent free suffix",
+                    "pricing": {"prompt": "0", "completion": "0.1"},
+                },
+            ]}
+
+    class OpenRouterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, headers: dict[str, str], params: dict[str, str]):
+            assert url == "https://openrouter.ai/api/v1/models"
+            assert headers == {"Authorization": "Bearer user-openrouter-key"}
+            assert params == {"output_modalities": "text"}
+            return OpenRouterResponse()
+
+    class AuthService:
+        async def current_user(self, access_token: str) -> CurrentUserResponse:
+            assert access_token == "valid-session-token"
+            return CurrentUserResponse(user_id="user-123", email="person@example.com")
+
+        async def ai_provider_credential(self, user_id: str) -> dict[str, object]:
+            return {"api_key_cifrada": "encrypted-openrouter-key"}
+
+    async def override_auth_service():
+        yield AuthService()
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: OpenRouterClient())
+    monkeypatch.setattr(api, "decrypt_api_key", lambda *_: "user-openrouter-key")
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.get(
+            "/api/v1/auth/ia/openrouter/models",
+            headers={"Authorization": "Bearer valid-session-token"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["models"] == [{
+        "id": "provider/free-model:free",
+        "name": "Free model",
+        "context_length": 32768,
+    }]
+
+
+def test_ai_api_key_encryption_round_trip_and_rejects_wrong_key() -> None:
+    encryption_key = Fernet.generate_key().decode("ascii")
+    other_key = Fernet.generate_key().decode("ascii")
+    encrypted_key = encrypt_api_key("user-openrouter-key", encryption_key)
+
+    assert encrypted_key != "user-openrouter-key"
+    assert decrypt_api_key(encrypted_key, encryption_key) == "user-openrouter-key"
+    with pytest.raises(ValueError, match="No fue posible descifrar"):
+        decrypt_api_key(encrypted_key, other_key)
+
+
+def test_ai_provider_settings_persist_encrypted_key_and_selected_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    encryption_key = Fernet.generate_key().decode("ascii")
+    probe_content = {"value": "200"}
+    probe_status = {"value": 200}
+    retry_after = {"value": ""}
+
+    class OpenRouterResponse:
+        status_code = 200
+        is_error = False
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"data": [{
+                "id": "provider/free-model:free",
+                "name": "Free model",
+                "context_length": 32768,
+                "pricing": {"prompt": "0", "completion": "0"},
+            }]}
+
+    class OpenRouterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, headers: dict[str, str], params: dict[str, str]):
+            assert url == "https://openrouter.ai/api/v1/models"
+            assert headers == {"Authorization": "Bearer user-openrouter-key"}
+            return OpenRouterResponse()
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, object]):
+            assert url == "https://openrouter.ai/api/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer " + "user-openrouter-key"
+            assert json["model"] == "provider/free-model:free"
+            assert json["messages"] == [{"role": "user", "content": "Responde únicamente: OK."}]
+            assert json["max_tokens"] == 256
+            return OpenRouterProbeResponse(probe_content["value"])
+
+    class OpenRouterProbeResponse:
+        def __init__(self, content: str) -> None:
+            self.content = content
+            self.status_code = probe_status["value"]
+            self.is_error = self.status_code >= 400
+            self.is_success = not self.is_error
+            self.headers = {"Retry-After": retry_after["value"]}
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": self.content}}]}
+
+    class AuthService:
+        credential: dict[str, object] | None = None
+
+        async def current_user(self, access_token: str) -> CurrentUserResponse:
+            assert access_token == "valid-session-token"
+            return CurrentUserResponse(user_id="user-123", email="person@example.com")
+
+        async def ai_provider_credential(self, user_id: str) -> dict[str, object] | None:
+            return self.credential
+
+        async def save_ai_provider_credential(
+            self,
+            user_id: str,
+            encrypted_api_key: str,
+            model_id: str | None,
+            activate: bool,
+        ) -> dict[str, object]:
+            self.credential = {
+                "id": "credential-1",
+                "api_key_cifrada": encrypted_api_key,
+                "modelo_id": model_id,
+                "es_activa": activate,
+            }
+            return self.credential
+
+
+    service = AuthService()
+
+    async def override_auth_service():
+        yield service
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: OpenRouterClient())
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        ai_credentials_encryption_key=encryption_key,
+    )
+    try:
+        probe_status["value"] = 429
+        retry_after["value"] = "75"
+        rate_limited_response = client.post(
+            "/api/v1/auth/ia/openrouter/validar",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={
+                "api_key": "user-openrouter-key",
+                "model_id": "provider/free-model:free",
+            },
+        )
+        assert rate_limited_response.status_code == 429
+        assert "Espera 2 minuto(s)" in rate_limited_response.json()["detail"]
+        assert service.credential is None
+
+        probe_status["value"] = 200
+        retry_after["value"] = ""
+        probe_content["value"] = ""
+        failed_probe_response = client.put(
+            "/api/v1/auth/ia/proveedor",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={
+                "provider": "openrouter",
+                "model_id": "provider/free-model:free",
+                "api_key": "user-openrouter-key",
+            },
+        )
+        assert failed_probe_response.status_code == 502
+        assert service.credential is None
+
+        probe_content["value"] = "La conexión está activa."
+        validation_response = client.post(
+            "/api/v1/auth/ia/openrouter/validar",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={"api_key": "user-openrouter-key"},
+        )
+        assert validation_response.status_code == 200
+        assert validation_response.json()["verified"] is False
+        assert service.credential is None
+
+        model_validation_response = client.post(
+            "/api/v1/auth/ia/openrouter/validar",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={
+                "api_key": "user-openrouter-key",
+                "model_id": "provider/free-model:free",
+            },
+        )
+        assert model_validation_response.status_code == 200
+        assert model_validation_response.json()["verified"] is True
+        assert service.credential is None
+
+        response = client.put(
+            "/api/v1/auth/ia/proveedor",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={
+                "provider": "openrouter",
+                "model_id": "provider/free-model:free",
+                "api_key": "user-openrouter-key",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "provider": "openrouter",
+            "model_id": "provider/free-model:free",
+            "has_api_key": True,
+        }
+        assert "user-openrouter-key" not in response.text
+        assert service.credential is not None
+        assert service.credential["api_key_cifrada"] != "user-openrouter-key"
+        assert decrypt_api_key(str(service.credential["api_key_cifrada"]), encryption_key) == "user-openrouter-key"
+
+        settings_response = client.get(
+            "/api/v1/auth/ia/proveedor",
+            headers={"Authorization": "Bearer valid-session-token"},
+        )
+        assert settings_response.json() == response.json()
+
+        unsupported_provider_response = client.put(
+            "/api/v1/auth/ia/proveedor",
+            headers={"Authorization": "Bearer valid-session-token"},
+            json={"provider": "unsupported"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unsupported_provider_response.status_code == 422
+
+
+def test_postulation_autocomplete_uses_selected_openrouter_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent_requests: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+    class OpenRouterResponse:
+        is_error = False
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"choices": [{
+                "message": {"content": "{\"respuestas\":[\"Tengo experiencia en automatización.\"]}"},
+            }]}
+
+    class OpenRouterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, object]):
+            sent_requests.append((url, headers, json))
+            return OpenRouterResponse()
+
+    class ProfileService:
+        async def current_user(self, access_token: str) -> CurrentUserResponse:
+            return CurrentUserResponse(user_id="user-openrouter", email="person@example.com")
+
+        async def ai_provider_credential(self, user_id: str) -> dict[str, object]:
+            return {
+                "es_activa": True,
+                "modelo_id": "provider/free-model:free",
+                "api_key_cifrada": "encrypted-openrouter-key",
+            }
+
+        async def profile(self, user_id: str) -> ProfileResponse:
+            return ProfileResponse(
+                user_id=user_id,
+                email="person@example.com",
+                account_status="activo",
+                rut="",
+                first_name="Ana",
+                last_name="Persona",
+                experience=[{
+                    "role": "Analista",
+                    "company": "Empresa",
+                    "startDate": "2023",
+                    "endDate": "Presente",
+                    "isCurrent": True,
+                    "description": "Automatización de procesos.",
+                    "stackTags": ["Python"],
+                }],
+                skills=["Python"],
+            )
+
+    async def override_auth_service():
+        yield ProfileService()
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: OpenRouterClient())
+    monkeypatch.setattr(api, "decrypt_api_key", lambda *_: "user-openrouter-key")
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        frontend_url="http://localhost:3000",
+    )
+    try:
+        response = client.post(
+            "/api/v1/auth/ia/autocompletar",
+            headers={
+                "Authorization": "Bearer test-access-token",
+            },
+            json={
+                "preguntas": ["¿Qué experiencia tienes en automatización?"],
+                "cargo_postulacion": "Analista",
+                "empresa": "Empresa",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+        api._AI_PROFILE_CACHE.pop("user-openrouter", None)
+
+    assert response.status_code == 200
+    assert response.json()["respuestas"] == ["Tengo experiencia en automatización."]
+    assert sent_requests[0][0] == "https://openrouter.ai/api/v1/chat/completions"
+    assert sent_requests[0][1]["Authorization"] == "Bearer user-openrouter-key"
+    assert sent_requests[0][2]["model"] == "provider/free-model:free"
+
+
+def test_cv_adaptation_forwards_openrouter_key_and_selected_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    class OpenRouterResponse:
+        is_error = False
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "resumen": "Profesional con experiencia en análisis.",
+                        "experiencias": [],
+                        "habilidades": [],
+                    }),
+                },
+            }]}
+
+    class OpenRouterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, object]):
+            assert url == "https://openrouter.ai/api/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer user-openrouter-key"
+            assert json["model"] == "provider/free-model:free"
+            return OpenRouterResponse()
+
+    class ProfileService:
+        async def current_user(self, access_token: str) -> CurrentUserResponse:
+            return CurrentUserResponse(user_id="user-123", email="person@example.com")
+
+        async def ai_provider_credential(self, user_id: str) -> dict[str, object]:
+            return {
+                "es_activa": True,
+                "modelo_id": "provider/free-model:free",
+                "api_key_cifrada": "encrypted-openrouter-key",
+            }
+
+        async def profile(self, user_id: str) -> ProfileResponse:
+            return ProfileResponse(
+                user_id=user_id,
+                email="person@example.com",
+                account_status="activo",
+                rut="",
+                first_name="Ana",
+                last_name="Persona",
+            )
+
+    async def override_auth_service():
+        yield ProfileService()
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: OpenRouterClient())
+    monkeypatch.setattr(api, "decrypt_api_key", lambda *_: "user-openrouter-key")
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        frontend_url="http://localhost:3000",
+    )
+    try:
+        response = client.post(
+            "/api/v1/auth/ia/adaptar-cv",
+            headers={
+                "Authorization": "Bearer valid-session-token",
+            },
+            json={
+                "cargo_postulacion": "Analista",
+                "model_id": "provider/free-model:free",
+                "cv_actual": {"summary": "Resumen original"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["resumen"] == "Profesional con experiencia en análisis."
+
+
+def test_cv_import_uses_database_openrouter_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticated_openrouter_service: None,
+) -> None:
+    class OpenRouterResponse:
+        is_error = False
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "nombre": "Ana Persona",
+                        "cargo": "Analista",
+                        "resumen": "Analista de datos.",
+                        "experiencia": [],
+                        "educacion": [],
+                        "skills": [],
+                    }),
+                },
+                "finish_reason": "stop",
+            }]}
+
+    class OpenRouterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, object]):
+            assert url == "https://openrouter.ai/api/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer user-openrouter-key"
+            assert json["model"] == "provider/free-model:free"
+            return OpenRouterResponse()
+
+    monkeypatch.setattr(api, "extraer_texto_pdf", lambda _: "Ana Persona\nExperiencia\nAnalista")
+    monkeypatch.setattr(
+        api,
+        "extraer_perfil_local_cv",
+        lambda *args: {
+            "experience": [],
+            "education": [],
+            "skills": [],
+            "personalData": {"nombre": "Ana Persona", "cargoObjetivo": "Analista", "resumen": ""},
+        },
+    )
+    monkeypatch.setattr(api, "_prompt_extraccion_cv", lambda _: "Extrae el perfil en JSON.")
+    monkeypatch.setattr(api, "dividir_texto_cv", lambda _: ["Ana Persona\nExperiencia\nAnalista"])
+    monkeypatch.setattr(api, "validar_experiencias_ia", lambda *_: [])
+    monkeypatch.setattr(api, "validar_educacion_ia", lambda *_: [])
+    monkeypatch.setattr(api, "validar_habilidades_ia", lambda *_: [])
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda **kwargs: OpenRouterClient())
+    monkeypatch.setattr(api, "decrypt_api_key", lambda *_: "user-openrouter-key")
+
+    response = client.post(
+        "/api/v1/auth/ia/procesar-cv",
+        headers={"Authorization": "Bearer valid-session-token"},
+        files={"cv_file": ("cv.pdf", b"%PDF-1.4\n", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["datos"]["personalData"]["nombre"] == "Ana Persona"
+    assert response.json()["datos"]["salaryData"] == {
+        "min": "",
+        "max": "",
+        "currency": "CLP",
+        "period": "Mensual",
+        "negotiable": False,
+    }
+
+
+def test_cv_import_uses_ai_output_without_local_reextraction(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticated_openrouter_service: None,
+) -> None:
+    cv_text = """Experiencia Laboral
+Desarrollador Web (Socio)
+Empresa: GreenCheck
+Periodo: 2025 - 2026
+Lideré el desarrollo e implementación de nuevas funcionalidades.
+Desarrollador Jr.
+Empresa: Macroactiva SPA
+Periodo: 2024 - 2025
+Diseñé e implementé una base de datos relacional.
+Educación
+Ingeniería en Informática
+Institución: Universidad Ejemplo
+Año: 2023
+"""
+    ai_experience = {
+        "cargo": "Desarrollador Web (Socio)",
+        "empresa": "GreenCheck",
+        "fecha_inicio": "2025",
+        "fecha_fin": "2026",
+        "ubicacion": "",
+        "tipo_jornada": "",
+        "descripcion": "Lideré el desarrollo e implementación de nuevas funcionalidades.",
+        "habilidades": [],
+        "evidencia": {
+            "cargo": "Desarrollador Web (Socio)",
+            "empresa": "GreenCheck",
+            "fecha_inicio": "2025 - 2026",
+            "fecha_fin": "2025 - 2026",
+            "ubicacion": "",
+            "tipo_jornada": "",
+            "descripcion": "Lideré el desarrollo e implementación de nuevas funcionalidades.",
+            "habilidades": [],
+        },
+        "pertinencia": {
+            "experiencia_laboral": True,
+            "cargo": True,
+            "empresa": True,
+            "fecha_inicio": True,
+            "fecha_fin": True,
+            "ubicacion": False,
+            "tipo_jornada": False,
+            "descripcion": True,
+            "habilidades": [],
+        },
+    }
+
+    class OpenRouterResponse:
+        is_error = False
+
         @staticmethod
         def json() -> dict[str, object]:
             return {"choices": [{
@@ -1636,7 +2380,7 @@ Año: 2023
     response = client.post(
         "/api/v1/auth/ia/procesar-cv",
         headers={"Authorization": "Bearer valid-session-token"},
-        files={"cv_file": ("cv-altoquecv.pdf", b"pdf", "application/pdf")},
+        files={"cv_file": ("cv-altoquecv.pdf", b"%PDF-1.4\n", "application/pdf")},
     )
 
     assert response.status_code == 200
@@ -1693,7 +2437,7 @@ def test_cv_import_rejects_truncated_ai_response_without_local_fallback(
     response = client.post(
         "/api/v1/auth/ia/procesar-cv",
         headers={"Authorization": "Bearer valid-session-token"},
-        files={"cv_file": ("cv.pdf", b"pdf", "application/pdf")},
+        files={"cv_file": ("cv.pdf", b"%PDF-1.4\n", "application/pdf")},
     )
 
     assert response.status_code == 502, response.text
@@ -1799,7 +2543,475 @@ def test_password_reset_rejects_expired_recovery_token() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "Sesión inválida o expirada"}
+    assert response.json() == {
+        "detail": "La sesión es inválida o expiró. Inicia sesión nuevamente."
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phone", "expected_phone"),
+    [("+56942149351", "+56942149351"), ("", None)],
+)
+async def test_profile_sync_saves_salary_and_clears_empty_phone(
+    monkeypatch: pytest.MonkeyPatch,
+    phone: str,
+    expected_phone: str | None,
+) -> None:
+    """Sincroniza la expectativa y permite limpiar el teléfono en la base de datos."""
+    requests: list[httpx.Request] = []
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, str]]:
+            return [{"id": "profile-id"}] if table == "perfiles_candidatos" else []
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+        payload = PerfilMaestroSyncRequest(
+            personalData={
+                "nombre": "Marcela Segovia",
+                "rut": "12345678-5",
+                "email": "marcela@example.com",
+                "teléfono": phone,
+            },
+            salaryData={"min": "", "max": "2200000"},
+        )
+
+        await service.sync_profile("user-id", payload)
+
+    profile_patch = next(request for request in requests if request.method == "PATCH")
+    assert json.loads(profile_patch.content) == {
+        "nombres": "Marcela",
+        "apellidos": "Segovia",
+        "rut_identificador": "12345678-5",
+        "telefono_movil": expected_phone,
+        "expectativa_salarial_liquida": None,
+        "expectativa_salarial_maxima": 2200000.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_profile_sync_deduplicates_skills_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+    existing_skills = [
+        {"id": "python-id", "nombre_habilidad": "Python"},
+        {"id": "python-duplicate-id", "nombre_habilidad": "python"},
+        {"id": "java-id", "nombre_habilidad": "Java"},
+    ]
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, object]]:
+            if table == "perfiles_candidatos":
+                return [{"id": "profile-id"}]
+            if table == "competencias_tecnicas":
+                return existing_skills
+            return []
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+        await service.sync_profile("user-id", PerfilMaestroSyncRequest(
+            skills=["Python", "python", " SQL "],
+        ))
+
+    delete_request = next(request for request in requests if request.method == "DELETE")
+    assert delete_request.url.path.endswith("/competencias_tecnicas")
+    assert delete_request.url.params["id"] == "in.(java-id,python-duplicate-id)"
+    assert delete_request.url.params["perfil_id"] == "eq.profile-id"
+    skills_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/competencias_tecnicas")
+    )
+    assert json.loads(skills_request.content) == [{
+        "perfil_id": "profile-id",
+        "nombre_habilidad": "SQL",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_profile_sync_persists_personal_data_beyond_browser_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, str]]:
+            return [{"id": "profile-id"}] if table == "perfiles_candidatos" else []
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+        await service.sync_profile("user-id", PerfilMaestroSyncRequest(
+            personalData={
+                "nombre": "Marcela Segovia",
+                "cargoObjetivo": "Analista de datos",
+                "región": "Región Metropolitana",
+                "comuna": "Maipú",
+                "linkedin": "https://linkedin.com/in/marcela",
+                "portafolio": "https://marcela.dev",
+                "resumen": "Ingeniera de datos con experiencia.",
+                "teléfono": "+56912345678",
+            },
+        ))
+
+    profile_patch = next(
+        request for request in requests
+        if request.method == "PATCH" and request.url.path.endswith("/perfiles_candidatos")
+    )
+    assert json.loads(profile_patch.content) == {
+        "nombres": "Marcela",
+        "apellidos": "Segovia",
+        "telefono_movil": "+56912345678",
+        "cargo_objetivo": "Analista de datos",
+        "region": "Región Metropolitana",
+        "comuna": "Maipú",
+        "url_linkedin": "https://linkedin.com/in/marcela",
+        "url_portafolio": "https://marcela.dev",
+        "resumen_profesional": "Ingeniera de datos con experiencia.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_profile_sync_preserves_education_with_unknown_start_year_as_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, str]]:
+            return [] if table == "formacion_academica" else [{"id": "profile-id"}]
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+        payload = PerfilMaestroSyncRequest(
+            education=[{
+                "institution": "Universidad Ejemplo",
+                "degree": "Ingeniería en Informática",
+                "startDate": "",
+                "endDate": "2026",
+            }],
+        )
+
+        await service._replace_profile_rows("formacion_academica", "profile-id", [
+            {
+                "institution": "Universidad Ejemplo",
+                "degree": "Ingeniería en Informática",
+                "startDate": payload.education[0]["startDate"],
+                "endDate": payload.education[0]["endDate"],
+                "location": "Maipú, Chile",
+                "studyMode": "Presencial",
+                "description": "Formación profesional.",
+                "tags": ["Bases de datos", "Análisis"],
+            }
+        ])
+
+    education_request = next(request for request in requests if request.method == "POST")
+    saved_education = json.loads(education_request.content)[0]
+    assert saved_education["anio_ingreso"] is None
+    assert saved_education["anio_egreso"] == 2026
+    assert saved_education["fecha_inicio_texto"] is None
+    assert saved_education["fecha_termino_texto"] == "2026"
+    assert saved_education["ubicacion"] == "Maipú, Chile"
+    assert saved_education["modalidad"] == "Presencial"
+    assert saved_education["descripcion"] == "Formación profesional."
+    assert saved_education["especialidades"] == ["Bases de datos", "Análisis"]
+
+
+@pytest.mark.asyncio
+async def test_profile_sync_nulls_unmatched_education_without_deleting_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+    current_rows = [
+        {
+            "id": "matched-education-id",
+            "institucion": "Universidad Ejemplo",
+            "grado_obtenido": "Ingeniería en Informática",
+        },
+        {
+            "id": "stale-education-id",
+            "institucion": "Instituto Antiguo",
+            "grado_obtenido": "Técnico",
+        },
+    ]
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, str]]:
+            assert table == "formacion_academica"
+            return current_rows
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+        await service._replace_profile_rows("formacion_academica", "profile-id", [{
+            "institution": "universidad ejemplo",
+            "degree": "INGENIERIA EN INFORMATICA",
+            "startDate": "",
+            "endDate": "2026",
+        }])
+
+    post_request = next(request for request in requests if request.method == "POST")
+    saved_education = json.loads(post_request.content)[0]
+    assert saved_education["id"] == "matched-education-id"
+    assert saved_education["institucion"] == "universidad ejemplo"
+
+    patch_request = next(request for request in requests if request.method == "PATCH")
+    assert patch_request.url.params["id"] == "in.(stale-education-id)"
+    assert json.loads(patch_request.content) == {
+        "institucion": None,
+        "grado_obtenido": None,
+        "anio_ingreso": None,
+        "anio_egreso": None,
+        "fecha_inicio_texto": None,
+        "fecha_termino_texto": None,
+        "ubicacion": None,
+        "modalidad": None,
+        "descripcion": None,
+        "especialidades": [],
+        "es_estudio_actual": False,
+    }
+    assert all(request.method != "DELETE" for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_profile_response_keeps_unknown_education_years_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient() as http_client:
+        service = SupabaseAuthService(settings, http_client)
+        tables = {
+            "usuarios": [{"id": "user-id", "correo_electronico": "person@example.com"}],
+            "perfiles_candidatos": [{
+                "id": "profile-id",
+                "rut_identificador": "",
+                "nombres": "Ana",
+                "apellidos": "Persona",
+                "expectativa_salarial_liquida": 1500000,
+                "expectativa_salarial_maxima": 2200000,
+                "cargo_objetivo": "Analista de datos",
+                "region": "Región Metropolitana",
+                "comuna": "Maipú",
+                "url_linkedin": "https://linkedin.com/in/ana",
+                "url_portafolio": "https://ana.dev",
+                "resumen_profesional": "Profesional de datos.",
+            }],
+            "formacion_academica": [{
+                "id": "education-id",
+                "institucion": "Universidad Ejemplo",
+                "grado_obtenido": "Ingeniería en Informática",
+                "anio_ingreso": None,
+                "anio_egreso": None,
+                "fecha_inicio_texto": "",
+                "fecha_termino_texto": "2026",
+                "ubicacion": "Maipú, Chile",
+                "modalidad": "Presencial",
+                "descripcion": "Ingeniería en Informática.",
+                "especialidades": ["Bases de datos"],
+                "es_estudio_actual": False,
+            }, {
+                "id": "empty-education-id",
+                "institucion": None,
+                "grado_obtenido": None,
+                "anio_ingreso": None,
+                "anio_egreso": None,
+                "fecha_inicio_texto": None,
+                "fecha_termino_texto": None,
+                "ubicacion": None,
+                "modalidad": None,
+                "descripcion": None,
+                "especialidades": [],
+                "es_estudio_actual": False,
+            }],
+            "trayectoria_laboral": [{
+                "id": "empty-experience-id",
+                "empresa": None,
+                "titulo_cargo": None,
+                "descripcion_logros": None,
+                "fecha_ingreso": None,
+                "fecha_salida": None,
+                "es_trabajo_actual": None,
+                "ubicacion": None,
+                "tipo_jornada": None,
+                "fecha_ingreso_texto": None,
+                "fecha_salida_texto": None,
+            }, {
+                "id": "experience-id",
+                "empresa": "Empresa Ejemplo",
+                "titulo_cargo": "Ingeniera de datos",
+                "descripcion_logros": "Implementé pipelines de datos.",
+                "fecha_ingreso": "2024-01-01",
+                "fecha_salida": "2025-01-01",
+                "es_trabajo_actual": False,
+                "ubicacion": "Santiago, Chile",
+                "tipo_jornada": "Jornada completa",
+                "fecha_ingreso_texto": "2024-03",
+                "fecha_salida_texto": "2025-11",
+            }],
+            "competencias_tecnicas": [],
+        }
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, object]]:
+            return tables[table]
+
+        monkeypatch.setattr(service, "_rest_get", mock_rest_get)
+
+        profile = await service.profile("user-id")
+
+    assert profile.education == [{
+        "id": "education-id",
+        "institution": "Universidad Ejemplo",
+        "degree": "Ingeniería en Informática",
+        "startDate": "",
+        "endDate": "2026",
+        "tags": ["Bases de datos"],
+        "location": "Maipú, Chile",
+        "studyMode": "Presencial",
+        "description": "Ingeniería en Informática.",
+        "studying": False,
+    }]
+    assert profile.experience == [{
+        "id": "experience-id",
+        "role": "Ingeniera de datos",
+        "company": "Empresa Ejemplo",
+        "startDate": "2024-03",
+        "endDate": "2025-11",
+        "isCurrent": False,
+        "location": "Santiago, Chile",
+        "employmentType": "Jornada completa",
+        "description": "Implementé pipelines de datos.",
+        "stackTags": [],
+    }]
+    assert profile.cargo_objetivo == "Analista de datos"
+    assert profile.salary_min == 1500000
+    assert profile.salary_max == 2200000
+    assert profile.region == "Región Metropolitana"
+    assert profile.comuna == "Maipú"
+    assert profile.linkedin == "https://linkedin.com/in/ana"
+    assert profile.portafolio == "https://ana.dev"
+    assert profile.resumen_profesional == "Profesional de datos."
+
+
+@pytest.mark.asyncio
+async def test_clear_profile_curricular_data_deletes_only_curricular_rows() -> None:
+    requests: list[httpx.Request] = []
+
+    def mock_supabase(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    settings = Settings(
+        supabase_url="https://project.supabase.co",
+        supabase_anon_key="test-anon-key",
+        supabase_service_role_key="test-service-role-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mock_supabase)) as http_client:
+        service = SupabaseAuthService(settings, http_client)
+
+        async def mock_rest_get(table: str, params: dict[str, str]) -> list[dict[str, str]]:
+            assert table == "perfiles_candidatos"
+            assert params["usuario_id"] == "eq.user-id"
+            return [{"id": "profile-id"}]
+
+        service._rest_get = mock_rest_get
+        await service.clear_profile_curricular_data("user-id")
+
+    assert len(requests) == 4
+    profile_patch = requests[0]
+    assert profile_patch.method == "PATCH"
+    assert profile_patch.url.path.endswith("/perfiles_candidatos")
+    assert profile_patch.url.params["id"] == "eq.profile-id"
+    assert json.loads(profile_patch.content) == {
+        "expectativa_salarial_liquida": None,
+        "expectativa_salarial_maxima": None,
+    }
+
+    deleted_tables = {request.url.path.rsplit("/", 1)[-1] for request in requests[1:]}
+    assert deleted_tables == {"formacion_academica", "trayectoria_laboral", "competencias_tecnicas"}
+    assert all(request.method == "DELETE" for request in requests[1:])
+    assert all(request.url.params["perfil_id"] == "eq.profile-id" for request in requests[1:])
+
+
+def test_clear_curricular_endpoint_requires_auth_and_does_not_delete_ai_credentials() -> None:
+    cleared_users: list[str] = []
+
+    class ClearProfileService:
+        async def current_user(self, access_token: str) -> CurrentUserResponse:
+            assert access_token == "valid-session-token"
+            return CurrentUserResponse(user_id="user-123", email="person@example.com")
+
+        async def clear_profile_curricular_data(self, user_id: str) -> None:
+            cleared_users.append(user_id)
+
+    async def override_auth_service():
+        yield ClearProfileService()
+
+    app.dependency_overrides[get_auth_service] = override_auth_service
+    try:
+        response = client.delete(
+            "/api/v1/auth/profile/curricular",
+            headers={"Authorization": "Bearer valid-session-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_auth_service, None)
+
+    assert response.status_code == 200
+    assert response.json() == {"exito": True}
+    assert cleared_users == ["user-123"]
 
 
 @pytest.mark.asyncio
@@ -2244,7 +3456,10 @@ async def test_clear_profile_curricular_data_deletes_only_curricular_rows() -> N
     assert profile_patch.method == "PATCH"
     assert profile_patch.url.path.endswith("/perfiles_candidatos")
     assert profile_patch.url.params["id"] == "eq.profile-id"
-    assert json.loads(profile_patch.content) == {"expectativa_salarial_liquida": None}
+    assert json.loads(profile_patch.content) == {
+        "expectativa_salarial_liquida": None,
+        "expectativa_salarial_maxima": None,
+    }
 
     deleted_tables = {request.url.path.rsplit("/", 1)[-1] for request in requests[1:]}
     assert deleted_tables == {"formacion_academica", "trayectoria_laboral", "competencias_tecnicas"}
@@ -2380,7 +3595,12 @@ def test_login_returns_403_for_restricted_accounts(message: str) -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 403
-    assert response.json() == {"detail": message}
+    expected_detail = (
+        "Correo no verificado"
+        if message == "Correo no verificado"
+        else "La cuenta no está habilitada para iniciar sesión."
+    )
+    assert response.json() == {"detail": expected_detail}
 
 
 def test_register_returns_409_for_duplicate_email() -> None:

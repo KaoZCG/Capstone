@@ -5,7 +5,9 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 # `FastAPI` es el framework que crea la API HTTP y genera OpenAPI automáticamente.
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 # `CORSMiddleware` permite que el frontend en otro origen, como localhost:3000,
 # pueda realizar peticiones al backend.
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,10 +38,10 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 # CORS controla qué frontend puede llamar a esta API desde el navegador.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 # El prefijo agrupa todas las rutas bajo `/api/v1`, facilitando versionar la API.
 app.include_router(router, prefix=settings.api_prefix)
@@ -49,3 +51,21 @@ app.include_router(router, prefix=settings.api_prefix)
 async def health() -> dict[str, str]:
     """Devuelve una respuesta mínima para comprobar que el servidor está vivo."""
     return {"status": "ok"}
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    """Conserva el detalle de validación sin reflejar valores enviados por el cliente."""
+    del request
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {key: value for key, value in item.items() if key not in {"input", "ctx"}}
+                for item in error.errors()
+            ]
+        },
+    )

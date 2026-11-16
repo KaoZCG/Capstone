@@ -5,19 +5,39 @@ import re
 # `EmailStr` valida el formato de email; `Field` define restricciones de campos.
 # `SecretStr` evita mostrar contraseñas accidentalmente en representaciones/logs.
 # `field_validator` valida un campo individual y `model_validator` reglas entre campos.
-from pydantic import AliasChoices, BaseModel, EmailStr, Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, SecretStr, TypeAdapter, ValidationError, field_validator, model_validator
+
+
+def format_chilean_rut(rut: str) -> str:
+    normalized = normalize_chilean_rut(rut)
+    if not is_valid_chilean_rut(normalized):
+        raise ValueError("RUT inválido: revisa el formato y el dígito verificador")
+    body, verifier = normalized.split("-")
+    reversed_body = body[::-1]
+    grouped = ".".join(
+        reversed_body[index:index + 3]
+        for index in range(0, len(reversed_body), 3)
+    )[::-1]
+    return f"{grouped}-{verifier}"
+
+
+def normalize_chilean_rut(rut: str) -> str:
+    normalized = rut.strip().replace(".", "").upper()
+    if "-" not in normalized and re.fullmatch(r"\d{7,8}[\dK]", normalized):
+        return f"{normalized[:-1]}-{normalized[-1]}"
+    return normalized
 
 
 def is_valid_chilean_rut(rut: str) -> bool:
     """Comprueba el formato y el dígito verificador de un RUT chileno.
 
-    Se aceptan RUT con puntos (`12.345.678-5`) o sin puntos (`12345678-5`),
-    pero siempre se exige guion y un cuerpo de 7 u 8 dígitos. El dígito
-    verificador se calcula con el algoritmo módulo 11 usado en Chile.
+    Se aceptan RUT con puntos y/o guion (`12.345.678-5`, `12345678-5`,
+    `123456785`) con cuerpo de 7 u 8 dígitos. El dígito verificador se calcula
+    con el algoritmo módulo 11 usado en Chile.
     """
     # Quitamos espacios y puntos para trabajar con una representación única,
     # y convertimos `k` a `K` porque ambos representan el mismo verificador.
-    normalized = rut.strip().replace(".", "").upper()
+    normalized = normalize_chilean_rut(rut)
     # Primero comprobamos la estructura para evitar errores al separar el RUT.
     if not re.fullmatch(r"\d{7,8}-[\dK]", normalized):
         return False
@@ -150,11 +170,28 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     """Cuerpo esperado por el endpoint de inicio de sesión."""
 
-    email: EmailStr
+    email: str = Field(validation_alias=AliasChoices("email", "identifier", "rut"))
     password: SecretStr = Field(
         min_length=1,
         validation_alias=AliasChoices("password", "contraseña"),
     )
+
+    @field_validator("email")
+    @classmethod
+    def validate_login_identifier(cls, value: str) -> str:
+        identifier = value.strip()
+        if "@" in identifier:
+            try:
+                return str(TypeAdapter(EmailStr).validate_python(identifier))
+            except ValidationError as error:
+                raise ValueError("Ingresa un correo electrónico válido o un RUT válido") from error
+        return format_chilean_rut(identifier)
+
+
+class RefreshTokenRequest(BaseModel):
+    """Token de renovación de una sesión Supabase."""
+
+    refresh_token: SecretStr = Field(min_length=1)
 
 
 class RefreshTokenRequest(BaseModel):

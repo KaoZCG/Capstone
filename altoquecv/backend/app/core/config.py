@@ -4,7 +4,7 @@ from functools import lru_cache
 
 # `AnyHttpUrl` valida que la URL de Supabase tenga un formato HTTP correcto.
 # `Field` permite declarar restricciones y valores por defecto de forma explícita.
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic import SecretStr
 # `BaseSettings` lee valores desde variables de entorno y `.env` usando los nombres
 # de los atributos; `SettingsConfigDict` configura ese comportamiento.
@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     ai_credentials_encryption_key: SecretStr | None = None
     # Orígenes de navegador autorizados por CORS.
     cors_origins: list[str] = ["http://localhost:3000", "https://www.laborum.cl", "https://www.trabajando.cl"]
+
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, origins: list[str]) -> list[str]:
+        normalized = [origin.rstrip("/") for origin in origins if origin.strip()]
+        if "*" in normalized:
+            raise ValueError("CORS_ORIGINS no puede incluir '*' cuando se permiten credenciales")
+        return normalized
 
     # Configura la carga automática desde `.env` y rechaza errores por variables extra.
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

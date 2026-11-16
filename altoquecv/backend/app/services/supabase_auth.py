@@ -1,6 +1,7 @@
 # `Any` describe el contenido dinámico del JSON de error recibido del proveedor.
 from typing import Any
 import base64
+import asyncio
 import json
 import unicodedata
 from uuid import uuid4
@@ -348,20 +349,21 @@ class SupabaseAuthService:
 
     @staticmethod
     def _database_error(response: httpx.Response, fallback: str) -> str:
-        try:
-            body = response.json()
-        except ValueError:
-            return fallback
-        return str(body.get("message") or body.get("hint") or body.get("details") or fallback)
+        return fallback
 
     async def login(self, payload: LoginRequest) -> AuthResponse:
         """Solicita tokens JWT para un email y contraseña válidos."""
+        email = payload.email
+        if "@" not in email:
+            email = await self._email_for_rut(email)
+            if not email:
+                raise AuthServiceError("Correo o contraseña incorrectos", status_code=401)
         response = await self._client.post(
             # `grant_type=password` indica a Supabase el flujo de login por contraseña.
             f"{self._base_url}/auth/v1/token?grant_type=password",
             headers=self._headers,
             json={
-                "email": str(payload.email),
+                "email": email,
                 "password": payload.password.get_secret_value(),
             },
         )
@@ -388,6 +390,29 @@ class SupabaseAuthService:
             # El perfil extendido es opcional para completar la respuesta de login.
             pass
         return auth_response
+
+    async def _email_for_rut(self, rut: str) -> str | None:
+        self._require_admin_headers()
+        profile_rows = await self._rest_get(
+            "perfiles_candidatos",
+            {
+                "select": "usuario_id",
+                "rut_identificador": f"eq.{rut}",
+                "limit": "1",
+            },
+        )
+        if not profile_rows:
+            return None
+        user_rows = await self._rest_get(
+            "usuarios",
+            {
+                "select": "correo_electronico",
+                "id": f"eq.{profile_rows[0]['usuario_id']}",
+                "limit": "1",
+            },
+        )
+        email = user_rows[0].get("correo_electronico") if user_rows else None
+        return email if isinstance(email, str) else None
 
     async def refresh_session(self, payload: RefreshTokenRequest) -> AuthResponse:
         """Renueva una sesión Supabase y devuelve el nuevo par de tokens."""
@@ -524,13 +549,18 @@ class SupabaseAuthService:
         }.items():
             if frontend_field in personal:
                 profile_update[database_field] = personal[frontend_field] or None
-        if "min" in payload.salaryData:
-            salary = payload.salaryData["min"]
+        for frontend_field, database_field in (
+            ("min", "expectativa_salarial_liquida"),
+            ("max", "expectativa_salarial_maxima"),
+        ):
+            if frontend_field not in payload.salaryData:
+                continue
+            salary = payload.salaryData[frontend_field]
             if salary in (None, ""):
-                profile_update["expectativa_salarial_liquida"] = None
+                profile_update[database_field] = None
             else:
                 try:
-                    profile_update["expectativa_salarial_liquida"] = float(salary)
+                    profile_update[database_field] = float(salary)
                 except (TypeError, ValueError):
                     pass
 
@@ -571,6 +601,7 @@ class SupabaseAuthService:
             if not company and not role:
                 continue
             experience.append({
+                "id": item.get("id"),
                 "company": company,
                 "role": role,
                 "startDate": item.get("startDate") or item.get("fecha_inicio"),
@@ -585,22 +616,54 @@ class SupabaseAuthService:
 
         existing_skills = await self._rest_get(
             "competencias_tecnicas",
-            {"select": "nombre_habilidad", "perfil_id": f"eq.{profile_id}"},
+            {"select": "id,nombre_habilidad", "perfil_id": f"eq.{profile_id}"},
         )
-        existing_names = {str(row.get("nombre_habilidad", "")).strip() for row in existing_skills}
-        requested_names = {skill.strip() for skill in payload.skills if skill.strip()}
-        removed_names = existing_names - requested_names
-        added_names = requested_names - existing_names
-        if removed_names:
+        requested_names: dict[str, str] = {}
+        for skill in payload.skills:
+            name = " ".join(skill.split())
+            if name:
+                requested_names.setdefault(name.casefold(), name)
+
+        existing_names: dict[str, str] = {}
+        stale_skill_ids: set[str] = set()
+        for row in existing_skills:
+            name = " ".join(str(row.get("nombre_habilidad") or "").split())
+            if not name:
+                if row.get("id"):
+                    stale_skill_ids.add(str(row["id"]))
+                continue
+            normalized_name = name.casefold()
+            if normalized_name in existing_names:
+                if row.get("id"):
+                    stale_skill_ids.add(str(row["id"]))
+            else:
+                existing_names[normalized_name] = name
+
+        stale_skill_ids.update(
+            str(row["id"])
+            for row in existing_skills
+            if row.get("id")
+            and " ".join(str(row.get("nombre_habilidad") or "").split()).casefold()
+            not in requested_names
+        )
+        if stale_skill_ids:
             await self._delete_profile_rows(
                 "competencias_tecnicas",
-                {"perfil_id": f"eq.{profile_id}", "nombre_habilidad": f"in.({','.join(removed_names)})"},
+                {"perfil_id": f"eq.{profile_id}", "id": f"in.({','.join(sorted(stale_skill_ids))})"},
             )
+        added_names = {
+            normalized: name
+            for normalized, name in requested_names.items()
+            if normalized not in existing_names
+        }
         if added_names:
             response = await self._client.post(
                 f"{self._base_url}/rest/v1/competencias_tecnicas",
                 headers={**self._admin_headers, "Prefer": "return=minimal"},
-                json=[{"perfil_id": profile_id, "nombre_habilidad": skill} for skill in sorted(added_names)],
+                json=[
+                    {"perfil_id": profile_id, "nombre_habilidad": name}
+                    for _, name in sorted(added_names.items())
+                ],
             )
             if response.is_error:
                 raise AuthServiceError(self._database_error(response, "No fue posible guardar las habilidades"), 502)
@@ -620,7 +683,10 @@ class SupabaseAuthService:
             f"{self._base_url}/rest/v1/perfiles_candidatos",
             headers={**self._admin_headers, "Prefer": "return=minimal"},
             params={"id": f"eq.{profile_id}"},
-            json={"expectativa_salarial_liquida": None},
+            json={
+                "expectativa_salarial_liquida": None,
+                "expectativa_salarial_maxima": None,
+            },
         )
         if response.is_error:
             raise AuthServiceError(self._database_error(response, "No fue posible limpiar la expectativa salarial"), 502)
@@ -814,41 +880,45 @@ class SupabaseAuthService:
     async def profile(self, user_id: str) -> ProfileResponse:
         """Lee los datos persistidos del usuario autenticado."""
         self._require_admin_headers()
-        user_rows = await self._rest_get(
-            "usuarios",
-            {"select": "id,correo_electronico,estado_cuenta", "id": f"eq.{user_id}"},
-        )
-        profile_rows = await self._rest_get(
-            "perfiles_candidatos",
-            {
-                "select": "id,rut_identificador,nombres,apellidos,telefono_movil,expectativa_salarial_liquida,cargo_objetivo,region,comuna,url_linkedin,url_portafolio,resumen_profesional",
-                "usuario_id": f"eq.{user_id}",
-            },
+        user_rows, profile_rows = await asyncio.gather(
+            self._rest_get(
+                "usuarios",
+                {"select": "id,correo_electronico,estado_cuenta", "id": f"eq.{user_id}"},
+            ),
+            self._rest_get(
+                "perfiles_candidatos",
+                {
+                    "select": "id,rut_identificador,nombres,apellidos,telefono_movil,expectativa_salarial_liquida,expectativa_salarial_maxima,cargo_objetivo,region,comuna,url_linkedin,url_portafolio,resumen_profesional",
+                    "usuario_id": f"eq.{user_id}",
+                },
+            ),
         )
         if not user_rows or not profile_rows:
             raise AuthServiceError("Perfil no encontrado en la base de datos", status_code=404)
 
         profile_id = profile_rows[0]["id"]
-        education_rows = await self._rest_get(
-            "formacion_academica",
-            {
-                "select": "id,institucion,grado_obtenido,anio_ingreso,anio_egreso,fecha_inicio_texto,fecha_termino_texto,ubicacion,modalidad,descripcion,especialidades,es_estudio_actual",
-                "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
-            },
-        )
-        experience_rows = await self._rest_get(
-            "trayectoria_laboral",
-            {
-                "select": "id,empresa,titulo_cargo,descripcion_logros,fecha_ingreso,fecha_salida,es_trabajo_actual,ubicacion,tipo_jornada,fecha_ingreso_texto,fecha_salida_texto",
-                "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
-            },
-        )
-        skill_rows = await self._rest_get(
-            "competencias_tecnicas",
-            {
-                "select": "nombre_habilidad",
-                "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
-            },
+        education_rows, experience_rows, skill_rows = await asyncio.gather(
+            self._rest_get(
+                "formacion_academica",
+                {
+                    "select": "id,institucion,grado_obtenido,anio_ingreso,anio_egreso,fecha_inicio_texto,fecha_termino_texto,ubicacion,modalidad,descripcion,especialidades,es_estudio_actual",
+                    "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
+                },
+            ),
+            self._rest_get(
+                "trayectoria_laboral",
+                {
+                    "select": "id,empresa,titulo_cargo,descripcion_logros,fecha_ingreso,fecha_salida,es_trabajo_actual,ubicacion,tipo_jornada,fecha_ingreso_texto,fecha_salida_texto",
+                    "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
+                },
+            ),
+            self._rest_get(
+                "competencias_tecnicas",
+                {
+                    "select": "nombre_habilidad",
+                    "perfil_id": f"eq.{profile_id}" if profile_id else "eq.null",
+                },
+            ),
         )
         user = user_rows[0]
         profile = profile_rows[0]
@@ -889,7 +959,7 @@ class SupabaseAuthService:
             ],
             skills=[row["nombre_habilidad"] for row in skill_rows],
             salary_min=profile.get("expectativa_salarial_liquida"),
-            salary_max=None,
+            salary_max=profile.get("expectativa_salarial_maxima"),
         )
 
     async def postulaciones(self, user_id: str) -> list[PostulacionResponse]:
@@ -1050,23 +1120,116 @@ class SupabaseAuthService:
         self._require_admin_headers()
         response = await self._client.patch(
             f"{self._base_url}/rest/v1/tablero_postulaciones",
-            headers={**self._admin_headers, "Prefer": "return=minimal"},
+            headers={**self._admin_headers, "Prefer": "return=representation"},
             params={"id": f"eq.{postulacion_id}", "usuario_id": f"eq.{user_id}"},
             json={"estado_fase": status},
         )
         if response.is_error:
             raise AuthServiceError(self._database_error(response, "No fue posible actualizar la postulación"), 502)
+        if not response.json():
+            raise AuthServiceError("No se encontró la postulación solicitada", 404)
 
     async def delete_postulacion(self, user_id: str, postulacion_id: str) -> None:
         """Elimina una postulación solo si pertenece al usuario autenticado."""
         self._require_admin_headers()
         response = await self._client.delete(
             f"{self._base_url}/rest/v1/tablero_postulaciones",
-            headers=self._admin_headers,
+            headers={**self._admin_headers, "Prefer": "return=representation"},
             params={"id": f"eq.{postulacion_id}", "usuario_id": f"eq.{user_id}"},
         )
         if response.is_error:
             raise AuthServiceError(self._database_error(response, "No fue posible eliminar la postulación"), 502)
+        if not response.json():
+            raise AuthServiceError("No se encontró la postulación solicitada", 404)
+
+    async def ai_provider_credential(self, user_id: str) -> dict[str, Any] | None:
+        rows = await self._rest_get(
+            "credenciales_proveedores_ia",
+            {
+                "select": "id,proveedor,nombre,modelo_id,api_key_cifrada,version_cifrado,es_activa",
+                "usuario_id": f"eq.{user_id}",
+                "proveedor": "eq.openrouter",
+                "nombre": "eq.OpenRouter",
+                "order": "actualizada_en.desc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def save_ai_provider_credential(
+        self,
+        user_id: str,
+        encrypted_api_key: str,
+        model_id: str | None,
+        activate: bool,
+    ) -> dict[str, Any]:
+        self._require_admin_headers()
+        url = f"{self._base_url}/rest/v1/credenciales_proveedores_ia"
+        row = {
+            "usuario_id": user_id,
+            "proveedor": "openrouter",
+            "nombre": "OpenRouter",
+            "modelo_id": model_id,
+            "api_key_cifrada": encrypted_api_key,
+            "version_cifrado": 1,
+            "es_activa": False,
+            "actualizada_en": datetime.now(timezone.utc).isoformat(),
+        }
+        response = await self._client.post(
+            url,
+            headers={**self._admin_headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "usuario_id,proveedor,nombre"},
+            json=row,
+        )
+        if response.is_error:
+            raise AuthServiceError(self._database_error(response, "No fue posible guardar la credencial de OpenRouter"), 502)
+        saved_rows = response.json()
+        if not isinstance(saved_rows, list) or not saved_rows or not isinstance(saved_rows[0].get("id"), str):
+            raise AuthServiceError("Supabase no confirmó el guardado de la credencial de OpenRouter", 502)
+        credential_id = saved_rows[0]["id"]
+
+        if activate:
+            deactivate_response = await self._client.patch(
+                url,
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={
+                    "usuario_id": f"eq.{user_id}",
+                    "es_activa": "eq.true",
+                    "id": f"neq.{credential_id}",
+                },
+                json={"es_activa": False, "actualizada_en": datetime.now(timezone.utc).isoformat()},
+            )
+            if deactivate_response.is_error:
+                raise AuthServiceError(
+                    self._database_error(deactivate_response, "No fue posible actualizar el proveedor seleccionado"),
+                    502,
+                )
+            activate_response = await self._client.patch(
+                url,
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{credential_id}", "usuario_id": f"eq.{user_id}"},
+                json={"es_activa": True, "actualizada_en": datetime.now(timezone.utc).isoformat()},
+            )
+            if activate_response.is_error:
+                raise AuthServiceError(
+                    self._database_error(activate_response, "No fue posible activar el modelo de OpenRouter"),
+                    502,
+                )
+        return saved_rows[0]
+
+    async def delete_ai_provider_credential(self, user_id: str) -> None:
+        self._require_admin_headers()
+        response = await self._client.delete(
+            f"{self._base_url}/rest/v1/credenciales_proveedores_ia",
+            headers=self._admin_headers,
+            params={
+                "usuario_id": f"eq.{user_id}",
+                "proveedor": "eq.openrouter",
+                "nombre": "eq.OpenRouter",
+            },
+        )
+        if response.is_error:
+            raise AuthServiceError(self._database_error(response, "No fue posible eliminar la credencial de OpenRouter"), 502)
 
     async def ai_provider_credential(self, user_id: str) -> dict[str, Any] | None:
         rows = await self._rest_get(
@@ -1192,12 +1355,29 @@ class SupabaseAuthService:
         un JSON que representa un fallo.
         """
         if response.is_error:
-            # Supabase suele entregar el detalle en `msg`; el valor alternativo cubre
-            # respuestas de error con otra estructura.
-            detail: Any = response.json().get("msg", "Error de autenticación")
-            if registration and "already registered" in str(detail).lower():
+            try:
+                detail: Any = response.json().get("msg") or response.json().get("message") or ""
+            except ValueError:
+                detail = ""
+            normalized_detail = str(detail).lower()
+            if registration and ("already registered" in normalized_detail or "already exists" in normalized_detail):
                 raise AuthServiceError("El correo electrónico ya está registrado", status_code=409)
-            raise AuthServiceError(str(detail), response.status_code)
+            if response.status_code == 429:
+                message = (
+                    "Se alcanzó el límite de correos. Espera unos minutos antes de volver a intentarlo."
+                    if registration
+                    else "Se alcanzó el límite de solicitudes. Intenta nuevamente más tarde."
+                )
+                raise AuthServiceError(message, 429)
+            if registration and response.status_code < 500:
+                if "password" in normalized_detail:
+                    raise AuthServiceError("La contraseña no cumple los requisitos de seguridad.", 400)
+                raise AuthServiceError("No fue posible crear la cuenta. Revisa los datos e inténtalo nuevamente.", 400)
+            if not registration and response.status_code in {401, 403}:
+                if "confirm" in normalized_detail or "verif" in normalized_detail:
+                    raise AuthServiceError("Correo no verificado", 403)
+                raise AuthServiceError("Correo o contraseña incorrectos", 401)
+            raise AuthServiceError("No fue posible completar la solicitud. Inténtalo nuevamente más tarde.", 502)
 
         # En un caso exitoso extraemos solamente los campos que nuestra API necesita.
         data = response.json()

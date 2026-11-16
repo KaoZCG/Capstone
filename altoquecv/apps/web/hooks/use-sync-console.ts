@@ -15,7 +15,10 @@ export function useSyncConsole() {
     if (saved) {
       const filtered = {
         ...saved,
-        logs: saved.logs.filter((log) => String(log.portal) !== 'laborum'),
+        sincronizandoAhora: false,
+        logs: saved.logs.filter((log) => !/demostraci[oó]n|no se consultaron ni guardaron/i.test(
+          `${log.mensaje} ${log.detalles ?? ''}`,
+        )),
       };
       setState(filtered);
       saveToStorage(CONSOLE_STORAGE_KEY, filtered);
@@ -40,35 +43,11 @@ export function useSyncConsole() {
     });
   }, []);
 
-  const sincronizarAhora = useCallback(async (portal: PortalName) => {
-    setState((prev) => ({ ...prev, sincronizandoAhora: true }));
-
-    addLog({
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      tipo: 'info',
-      portal,
-      mensaje: `Iniciando sincronización de demostración en ${portal}...`,
-    });
-
-    // La consola muestra una animación local; no consulta portales ni agrega ofertas.
-    setTimeout(() => {
-      addLog({
-        id: `log-${Date.now() + 1}`,
-        timestamp: new Date().toISOString(),
-        tipo: 'success',
-        portal,
-        mensaje: 'Sincronización completada con éxito',
-        detalles: 'Demostración local completada. No se consultaron ni guardaron ofertas.',
-      });
-
-      setState((prev) => ({
-        ...prev,
-        sincronizandoAhora: false,
-        ultimaSincronizacion: new Date().toISOString(),
-      }));
-    }, 2500);
-  }, [addLog]);
+  const sincronizarAhora = useCallback((portal: PortalName): Promise<void> => {
+    return Promise.reject(
+      new Error(`La sincronización automática de ${portal} aún no está disponible.`),
+    );
+  }, []);
 
   const clearLogs = useCallback(() => {
     setState((prev) => {

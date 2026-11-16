@@ -4,7 +4,7 @@ import { CheckCircle2 } from 'lucide-react';
 
 export function ComparadorATS() {
   return (
-    <section className="py-24 bg-surface-container-lowest border-y border-border">
+    <section id="comparador-ats" className="py-24 bg-surface-container-lowest border-y border-border">
       <div className="max-w-7xl mx-auto px-4 md:px-8 grid lg:grid-cols-2 gap-16 items-center">
         
         <div>
@@ -33,7 +33,12 @@ export function ComparadorATS() {
               <h3 className="font-bold text-on-surface">Comparativa de Impacto ATS</h3>
               <p className="text-xs text-on-surface-variant">Basado en datos de 5,000+ postulaciones chilenas.</p>
             </div>
-            <div className="overflow-x-auto">
+            <div
+              className="overflow-x-auto"
+              role="region"
+              aria-label="Comparativa de métricas ATS"
+              tabIndex={0}
+            >
               <table className="w-full text-sm text-left">
                 <thead className="bg-surface-container text-on-surface-variant text-xs uppercase">
                   <tr>

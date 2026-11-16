@@ -1,6 +1,7 @@
 declare const chrome: any;
 
-const API_URL = 'http://localhost:8000/api/v1';
+import { getApiUrl } from './runtime-config';
+
 const SESSION_KEY = 'altoquecv_extension_session';
 const AI_MODEL_CONFIG_KEY = 'altoquecv_ai_model_config';
 let aiModelConfig: {
@@ -71,11 +72,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender: unknown, sendRespon
     }
 
     try {
+      const apiUrl = getApiUrl();
       const endpoint = isProfileRequest
-        ? `${API_URL}/auth/profile`
+        ? `${apiUrl}/auth/profile`
         : isSavedLaborumOfferRequest
-          ? `${API_URL}/auth/ofertas-laborum`
-          : `${API_URL}/auth/ia/${isWarmup ? 'precalentar' : 'autocompletar'}`;
+          ? `${apiUrl}/auth/ofertas-laborum`
+          : `${apiUrl}/auth/ia/${isWarmup ? 'precalentar' : 'autocompletar'}`;
       const response = await fetch(endpoint, {
         method: isProfileRequest || isSavedLaborumOfferRequest ? 'GET' : 'POST',
         headers: {
@@ -115,8 +117,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender: unknown, sendRespon
       } else {
         sendResponse(body);
       }
-    } catch {
-      sendResponse({ exito: false, detail: 'No se pudo conectar con el backend local.' });
+    } catch (error) {
+      sendResponse({
+        exito: false,
+        detail: error instanceof Error ? error.message : 'No se pudo conectar con el backend.',
+      });
     }
   })();
 

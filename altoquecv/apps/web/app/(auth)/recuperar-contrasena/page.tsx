@@ -11,12 +11,17 @@ export default function RecuperarContrasenaPage() {
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [emailTouched, setEmailTouched] = useState(false);
 
   // Validar formato de correo electrónico
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const emailError = emailTouched && !isEmailValid
+    ? email.trim() ? 'Ingresa un correo electrónico válido' : 'Este campo es obligatorio'
+    : '';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setEmailTouched(true);
     if (!isEmailValid) return;
 
     setIsSubmitting(true);
@@ -40,7 +45,7 @@ export default function RecuperarContrasenaPage() {
             <div className="w-16 h-16 bg-success-container text-success rounded-full flex items-center justify-center mx-auto mb-6">
               <Mail size={32} />
             </div>
-            <h2 className="text-2xl font-bold text-on-surface mb-2">Solicitud recibida</h2>
+            <h1 className="text-2xl font-bold text-on-surface mb-2">Solicitud recibida</h1>
             <p className="text-sm text-on-surface-variant mb-8">
               <span className="block mb-2">{successMessage}</span>
               Revisa la bandeja de entrada y spam de <strong>{email}</strong>.
@@ -61,19 +66,25 @@ export default function RecuperarContrasenaPage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <form noValidate onSubmit={handleSubmit} className="space-y-6">
               <div>
-                <label className="block text-xs font-semibold text-on-surface-variant mb-1 uppercase tracking-wider">Correo Electrónico</label>
+                <label htmlFor="recovery-email" className="block text-xs font-semibold text-on-surface-variant mb-1 uppercase tracking-wider">Correo Electrónico</label>
                 <div className="relative">
                   <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
                   <input 
+                    id="recovery-email"
                     type="email" 
+                    autoComplete="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="correo@ejemplo.com" 
-                    className="w-full pl-10 pr-4 py-3 bg-surface-container-low border border-border rounded-lg text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all" 
+                    onBlur={() => setEmailTouched(true)}
+                    onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                    aria-invalid={Boolean(emailError)}
+                    aria-describedby={emailError ? 'recovery-email-error' : undefined}
+                    placeholder="correo@ejemplo.com"
+                    className="w-full pl-10 pr-4 py-3 bg-surface-container-low border border-border rounded-lg text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
                   />
                 </div>
+                {emailError && <p id="recovery-email-error" className="mt-1 text-sm text-error">{emailError}</p>}
               </div>
               {error && <p role="alert" aria-live="polite" className="-mt-3 rounded border border-error/30 bg-error-container/20 p-3 text-sm text-error">{error}</p>}
 

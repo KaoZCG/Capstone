@@ -16,8 +16,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-    const storedTheme = localStorage.getItem("altoquecv-theme") as Theme | null;
-    if (storedTheme) {
+    const storedTheme = localStorage.getItem("altoquecv-theme");
+    if (storedTheme === "light" || storedTheme === "dark") {
       setTheme(storedTheme);
       document.documentElement.classList.toggle("dark", storedTheme === "dark");
     } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {

@@ -1,12 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Search, Filter, Plus } from 'lucide-react';
 import { KanbanBoard } from './components/kanban-board';
 import { Button } from '@/components/ui/Button';
+import type { PostulacionStatus } from '@/types';
 
-export default function MisPostulacionesPage() {
-  const [searchQuery, setSearchQuery] = useState('');
+const statusOptions: { value: PostulacionStatus | 'todas'; label: string }[] = [
+  { value: 'todas', label: 'Todas las postulaciones' },
+  { value: 'postulada', label: 'Postuladas' },
+  { value: 'cv-en-revision', label: 'CV en revisión' },
+  { value: 'entrevista-agendada', label: 'Entrevista agendada' },
+  { value: 'oferta-negociacion', label: 'Ofertas / negociación' },
+];
+
+export default function MisPostulacionesPage({
+  searchParams,
+}: {
+  searchParams?: { buscar?: string };
+}) {
+  const initialQuery = searchParams?.buscar ?? '';
+  const [searchQuery, setSearchQuery] = useState(initialQuery);
+  const [statusFilter, setStatusFilter] = useState<PostulacionStatus | 'todas'>('todas');
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+
+  useEffect(() => setSearchQuery(initialQuery), [initialQuery]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-6rem)]">
@@ -18,7 +37,7 @@ export default function MisPostulacionesPage() {
               Arrastra las tarjetas para actualizar el estado de tu embudo.
             </p>
           </div>
-          <Button variant="primary" className="gap-2 shrink-0">
+          <Button variant="primary" className="gap-2 shrink-0" onClick={() => setIsCreateOpen(true)}>
             <Plus size={18} /> Nueva Postulación
           </Button>
         </div>
@@ -34,14 +53,35 @@ export default function MisPostulacionesPage() {
               className="w-full pl-10 pr-4 py-2 border border-border rounded-input bg-surface-container text-on-surface placeholder:text-on-surface-variant focus:border-primary focus:outline-none transition-colors"
             />
           </div>
-          <Button variant="secondary" className="gap-2 w-full md:w-auto">
-            <Filter size={18} /> Filtros
-          </Button>
+          <div className="relative w-full md:w-auto">
+            <Button type="button" variant="secondary" className="gap-2 w-full md:w-auto" aria-expanded={isFilterOpen} onClick={() => setIsFilterOpen((open) => !open)}>
+              <Filter size={18} /> Filtros
+            </Button>
+            {isFilterOpen && (
+              <div className="absolute right-0 z-20 mt-2 w-full min-w-56 rounded-card border border-border bg-surface-container-lowest p-2 shadow-lg">
+                {statusOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => { setStatusFilter(option.value); setIsFilterOpen(false); }}
+                    className={`block w-full rounded-input px-3 py-2 text-left text-label-sm ${statusFilter === option.value ? 'bg-primary-container/20 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       <div className="flex-1 min-h-0">
-        <KanbanBoard searchQuery={searchQuery} />
+        <KanbanBoard
+          searchQuery={searchQuery}
+          statusFilter={statusFilter}
+          isCreateOpen={isCreateOpen}
+          onCloseCreate={() => setIsCreateOpen(false)}
+        />
       </div>
     </div>
   );

@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { Settings2, Cpu } from 'lucide-react';
-import { portalesMock, autocompleteMockConfig } from '@/lib/mock/portales.mock';
+import { autocompleteMockConfig } from '@/lib/mock/portales.mock';
 import { useSyncConsole } from '@/hooks/use-sync-console';
+import { usePortales } from '@/hooks/use-portales';
 
 import { PortalCard } from './components/portal-card';
 import { RuleItem } from './components/rule-item';
@@ -11,14 +12,18 @@ import { AutocompleteFilters } from './components/autocomplete-filters';
 import { SyncConsole } from './components/sync-console';
 
 export default function ConfiguracionPortalesPage() {
-  const [portales, setPortales] = useState(portalesMock);
+  const { portales, toggleConnection } = usePortales();
   const [config, setConfig] = useState(autocompleteMockConfig);
+  const [syncError, setSyncError] = useState('');
   const { state: consoleState, sincronizarAhora, clearLogs } = useSyncConsole();
 
-  const handleToggleConnect = (id: string) => {
-    setPortales(prev => prev.map(p => 
-      p.id === id ? { ...p, conectado: !p.conectado } : p
-    ));
+  const handleSync = async (portalId: (typeof portales)[number]['id']) => {
+    setSyncError('');
+    try {
+      await sincronizarAhora(portalId);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'La sincronización no está disponible.');
+    }
   };
 
   const handleToggleRule = (id: string) => {
@@ -35,7 +40,7 @@ export default function ConfiguracionPortalesPage() {
           <Settings2 className="text-primary" size={32} /> Configuración y Portales
         </h1>
         <p className="text-body-lg text-on-surface-variant">
-          Administra las conexiones a bolsas de empleo y define las reglas de intervención del copiloto.
+          Configura las preferencias de portales y las reglas de intervención. La sincronización automática aún no está disponible.
         </p>
       </header>
 
@@ -48,11 +53,12 @@ export default function ConfiguracionPortalesPage() {
               key={portal.id}
               portal={portal}
               isSyncing={consoleState.sincronizandoAhora}
-              onToggleConnect={() => handleToggleConnect(portal.id)}
-              onSync={() => sincronizarAhora(portal.id)}
+              onToggleConnect={() => toggleConnection(portal.id)}
+              onSync={() => void handleSync(portal.id)}
             />
           ))}
         </div>
+        {syncError && <p role="alert" className="mt-4 text-body-sm text-error">{syncError}</p>}
       </section>
 
       {/* Sección 2: Layout de Grilla para Filtros y Consola */}

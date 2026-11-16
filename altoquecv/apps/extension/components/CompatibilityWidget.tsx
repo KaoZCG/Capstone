@@ -3,24 +3,41 @@ import { X, ExternalLink, Sparkles } from 'lucide-react';
 import type { OfertaDetectada, CompatibilidadWidget as ICompatibilidadWidget } from '../types/oferta';
 import { ScoreGauge } from './ScoreGauge';
 import { ScoreBreakdown } from './ScoreBreakdown';
+import { DetectedDataCard } from './DetectedDataCard';
+import type { WidgetProfileData } from '../types/oferta';
+import { getAppUrl } from '../runtime-config';
 
 declare const chrome: any;
-
-const APP_URL = 'http://localhost:3000';
 
 interface Props {
   oferta: OfertaDetectada;
   compatibilidad: ICompatibilidadWidget | null;
+  profileData: WidgetProfileData | null;
+  detectedFieldCount: number;
+  onDetectedFieldCountChange: (count: number) => void;
+  aiResponseStatus: string;
+  onAiResponseStatusChange: (status: string) => void;
   cargando?: boolean;
   onClose: () => void;
 }
 
-export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, onClose }: Props) {
+export function CompatibilityWidget({
+  oferta,
+  compatibilidad,
+  profileData,
+  detectedFieldCount,
+  onDetectedFieldCountChange,
+  aiResponseStatus,
+  onAiResponseStatusChange,
+  cargando = false,
+  onClose,
+}: Props) {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleAutoFill = async () => {
     setIsLoading(true);
+    onAiResponseStatusChange("Generando...");
     setToastMsg("🤖 Cargando tu Perfil Maestro y adaptando respuestas al cargo...");
 
     try {
@@ -41,6 +58,7 @@ export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, 
           preguntas.push(textoPregunta);
         }
       });
+      onDetectedFieldCountChange(camposValidos.length);
 
       if (preguntas.length === 0) throw new Error("⚠️ No se detectaron preguntas válidas.");
 
@@ -56,18 +74,22 @@ export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, 
         throw new Error(data?.detail || 'No se recibieron respuestas de la IA.');
       }
 
+      let respuestasValidas = 0;
       camposValidos.forEach((campo, index) => {
         const respuestaIA = data.respuestas[index];
         if (respuestaIA && !respuestaIA.includes("Error")) {
           campo.elemento.value = respuestaIA;
           campo.elemento.dispatchEvent(new Event("input", { bubbles: true }));
           campo.elemento.dispatchEvent(new Event("change", { bubbles: true }));
+          respuestasValidas += 1;
         }
       });
 
-      setToastMsg("✨ ¡Postulación autocompletada!");
+      onAiResponseStatusChange(respuestasValidas ? "Generada" : "Sin respuestas válidas");
+      setToastMsg(respuestasValidas ? "✨ ¡Postulación autocompletada!" : "La IA no generó respuestas válidas.");
     } catch (error) {
       console.error("Error:", error);
+      onAiResponseStatusChange("No disponible");
       setToastMsg(error instanceof Error ? error.message : "Falló la conexión.");
     } finally {
       setTimeout(() => setToastMsg(null), 4000);
@@ -76,19 +98,28 @@ export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, 
   };
 
   const handleAdaptCV = () => {
-    const destination = new URL('/adaptador', APP_URL);
-    destination.searchParams.set('cargo', oferta.titulo);
-    if (oferta.empresa && oferta.empresa !== 'Empresa Confidencial') {
-      destination.searchParams.set('empresa', oferta.empresa);
+    try {
+      const appUrl = getAppUrl();
+      if (!appUrl) {
+        setToastMsg('Configura PLASMO_PUBLIC_APP_URL para abrir el adaptador de CV.');
+        return;
+      }
+      const destination = new URL('/adaptador', appUrl);
+      destination.searchParams.set('cargo', oferta.titulo);
+      if (oferta.empresa && oferta.empresa !== 'Empresa Confidencial') {
+        destination.searchParams.set('empresa', oferta.empresa);
+      }
+      if (oferta.descripcion) {
+        destination.searchParams.set('descripcion', oferta.descripcion.slice(0, 1800));
+      }
+      window.open(destination.toString(), '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setToastMsg(error instanceof Error ? error.message : 'No se pudo abrir el adaptador de CV.');
     }
-    if (oferta.descripcion) {
-      destination.searchParams.set('descripcion', oferta.descripcion.slice(0, 1800));
-    }
-    window.open(destination.toString(), '_blank', 'noopener,noreferrer');
   };
 
   return (
-    <div className="fixed top-4 right-4 z-[9999] w-[320px] bg-surface rounded-2xl shadow-2xl border border-border overflow-hidden font-sans">
+    <div className="fixed top-4 right-4 z-[9999] w-[320px] max-h-[calc(100vh-2rem)] overflow-y-auto overflow-x-hidden bg-surface rounded-2xl shadow-2xl border border-border font-sans">
       {/* Notificación Flotante */}
       {toastMsg && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-on-surface text-surface text-xs font-medium px-4 py-1.5 rounded-full z-10 shadow-lg whitespace-nowrap animate-in fade-in slide-in-from-top-2">
@@ -120,6 +151,9 @@ export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, 
 
         {/* Sección de Puntaje Centralizada */}
         <div className="flex flex-col items-center gap-5 mb-7 bg-surface-container-low p-5 rounded-2xl border border-border/40 shadow-inner">
+          <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
+            Score ATS en vivo
+          </h4>
           {cargando || !compatibilidad ? (
             <p className="text-xs text-on-surface-variant text-center">Leyendo la oferta y comparando tu Perfil Maestro…</p>
           ) : (
@@ -134,6 +168,13 @@ export function CompatibilityWidget({ oferta, compatibilidad, cargando = false, 
             </>
           )}
         </div>
+
+        <DetectedDataCard
+          profile={profileData}
+          detectedFieldCount={detectedFieldCount}
+          aiResponseStatus={aiResponseStatus}
+          loading={cargando}
+        />
 
         {/* Botones de Acción */}
         <div className="flex flex-col gap-3">

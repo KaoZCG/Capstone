@@ -14,12 +14,14 @@ import { useAIModel } from '@/hooks/use-ai-model';
 import { useProfile } from '@/hooks/use-profile';
 import { Education, Experience } from '@/types/perfil';
 import { PROFILE_KEYWORD_CATEGORIES, TECHNICAL_SKILL_CATEGORIES } from '@/lib/profile-catalogs';
-import { getNationalPhoneNumber, toInternationalPhoneNumber } from '@/lib/auth';
+import { formatRUT, getNationalPhoneNumber, isValidRUT, toInternationalPhoneNumber } from '@/lib/auth';
 import chileLocations from '@/lib/chile-locations.json';
 import { Download, FileText, LoaderCircle, Pencil, Search, Sparkles, Trash2, UserRound, X } from 'lucide-react';
 import CargadorCV from '@/components/perfil-maestro/CargadorCV';
 import { deleteOriginalProfileCV, loadOriginalProfileCV, type StoredProfileCV } from '@/lib/profile-cv-storage';
 import { useProfileAvatar } from '@/hooks/use-profile-avatar';
+
+declare const process: { env: { NEXT_PUBLIC_API_URL?: string } };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
@@ -34,6 +36,17 @@ function normalizeExperiencePart(value: string | undefined): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLocaleLowerCase('es-CL');
+}
+
+function deduplicateSkills(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.reduce<string[]>((result, value) => {
+    const normalized = value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('es-CL');
+    if (!normalized || seen.has(normalized)) return result;
+    seen.add(normalized);
+    result.push(value.trim());
+    return result;
+  }, []);
 }
 
 function toMonthInputValue(value: string): string {
@@ -197,13 +210,13 @@ export default function PerfilMaestroPage() {
     });
     setEducation(profile?.education ?? saved?.education ?? []);
     setExperience(deduplicateExperiences(profile?.experience ?? saved?.experience ?? []));
-    setSkills(profile?.skills ?? saved?.skills ?? []);
+    setSkills(deduplicateSkills(profile?.skills ?? saved?.skills ?? []));
     setKeywords(saved?.keywords ?? []);
     setSalaryData({
       ...initialSalaryData,
       ...savedSalaryData,
       min: profile ? profile.salary_min?.toString() ?? '' : savedSalaryData.min ?? '',
-      max: savedSalaryData.max ?? profile?.salary_max?.toString() ?? '',
+      max: profile ? profile.salary_max?.toString() ?? '' : savedSalaryData.max ?? '',
     });
     setHydratedKey(storageKey);
   }, [isLoading, profile, storageKey, usuario]);
@@ -349,7 +362,7 @@ export default function PerfilMaestroPage() {
     const importedKeywords = Array.isArray(datosIA.keywords)
       ? datosIA.keywords.filter((keyword: unknown): keyword is string => typeof keyword === 'string')
       : [];
-    const nextSkills = Array.from(new Set([...skills, ...importedSkills]));
+    const nextSkills = deduplicateSkills([...skills, ...importedSkills]);
     const nextKeywords = Array.from(new Set([...keywords, ...importedKeywords]));
     const nextSalaryData = datosIA.salaryData
       ? { ...salaryData, ...datosIA.salaryData }
@@ -537,22 +550,32 @@ export default function PerfilMaestroPage() {
   };
 
   const toggleCatalogValue = (value: string) => {
-    const update = (current: string[]) => current.includes(value)
+    const normalizedValue = value.trim().toLocaleLowerCase('es-CL');
+    const updateSkills = (current: string[]) => current.some(
+      (item) => item.trim().toLocaleLowerCase('es-CL') === normalizedValue,
+    )
+      ? current.filter((item) => item.trim().toLocaleLowerCase('es-CL') !== normalizedValue)
+      : deduplicateSkills([...current, value]);
+    const updateKeywords = (current: string[]) => current.includes(value)
       ? current.filter((item) => item !== value)
       : [...current, value];
-    if (modal === 'skills') setSkills(update);
-    if (modal === 'keywords') setKeywords(update);
+    if (modal === 'skills') setSkills(updateSkills);
+    if (modal === 'keywords') setKeywords(updateKeywords);
   };
 
   const addCustomCatalogValue = () => {
     const value = customCatalogValue.trim();
     if (!value) return;
-    if (modal === 'skills') setSkills((current) => current.includes(value) ? current : [...current, value]);
+    if (modal === 'skills') setSkills((current) => deduplicateSkills([...current, value]));
     if (modal === 'keywords') setKeywords((current) => current.includes(value) ? current : [...current, value]);
     setCustomCatalogValue('');
   };
 
   const saveProfile = async () => {
+    if (rutInvalid) {
+      setSaveError('RUT inválido: revisa el formato y el dígito verificador.');
+      return;
+    }
     const perfilLocal = {
       personalData,
       education,
@@ -572,6 +595,7 @@ export default function PerfilMaestroPage() {
     setIsSavingProfile(true);
     try {
       await syncProfileToServer(perfilLocal);
+      setSavedAt(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }));
     } catch (error) {
       setSaveError(error instanceof Error
         ? `Se guardó en este dispositivo, pero no se sincronizó: ${error.message}`
@@ -754,6 +778,7 @@ export default function PerfilMaestroPage() {
   })).filter((entry) => entry.values.length > 0);
   const salaryRangeInvalid = Boolean(salaryData.min && salaryData.max && Number(salaryData.min) > Number(salaryData.max));
   const phoneNumberInvalid = Boolean(personalData.teléfono) && personalData.teléfono.length !== 9;
+  const rutInvalid = Boolean(personalData.rut.trim()) && !isValidRUT(personalData.rut);
   const selectedRegion = CHILE_REGIONS.find((region) => region.name === personalData.región);
 
   return (
@@ -928,15 +953,20 @@ export default function PerfilMaestroPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-label-md font-semibold mb-2 text-on-surface">RUT / Cédula</label>
+                    <label htmlFor="profile-rut" className="block text-label-md font-semibold mb-2 text-on-surface">RUT / Cédula</label>
                     <div className="flex gap-2">
                       <Input
+                        id="profile-rut"
                         value={personalData.rut}
                         onChange={(e) => handlePersonalDataChange('rut', e.target.value)}
+                        onBlur={(e) => handlePersonalDataChange('rut', formatRUT(e.target.value))}
                         placeholder="11.111.111-1"
+                        aria-invalid={rutInvalid}
+                        aria-describedby={rutInvalid ? 'profile-rut-error' : undefined}
                         className="flex-1"
                       />
                     </div>
+                    {rutInvalid && <p id="profile-rut-error" className="mt-1 text-label-sm text-error">RUT inválido: revisa el dígito verificador.</p>}
                   </div>
                 </div>
               </div>
@@ -1168,7 +1198,7 @@ export default function PerfilMaestroPage() {
                 <h4 className="text-body-lg font-semibold text-on-surface mb-2">Habilidades técnicas y blandas <span className="text-label-sm font-normal text-on-surface-variant">({skills.length})</span></h4>
                 <p className="text-body-sm text-on-surface-variant mb-4">Elige las que realmente tienes o agrega cualquier habilidad manualmente. El catálogo incluye competencias de distintas áreas profesionales.</p>
                 <div className="flex flex-wrap gap-2">
-                  {skills.map((skill) => <button key={skill} type="button" onClick={() => setSkills((current) => current.filter((item) => item !== skill))} className="inline-flex items-center gap-2 rounded-pill bg-primary-container px-3 py-1.5 text-label-sm text-on-primary-container hover:bg-error-container/30" aria-label={`Quitar habilidad ${skill}`}>{skill}<X size={14} /></button>)}
+                  {skills.map((skill) => <button key={skill} type="button" onClick={() => setSkills((current) => current.filter((item) => item.trim().toLocaleLowerCase('es-CL') !== skill.trim().toLocaleLowerCase('es-CL')))} className="inline-flex items-center gap-2 rounded-pill bg-primary-container px-3 py-1.5 text-label-sm text-on-primary-container hover:bg-error-container/30" aria-label={`Quitar habilidad ${skill}`}>{skill}<X size={14} /></button>)}
                   {skills.length === 0 && <p className="text-body-md text-on-surface-variant">Agrega competencias técnicas o blandas que realmente tengas.</p>}
                 </div>
               </Card>
@@ -1225,7 +1255,7 @@ export default function PerfilMaestroPage() {
         <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-4 mt-4 pt-6 border-t border-border">
           <p aria-live="polite" className={`text-label-sm ${saveError ? 'text-error' : 'text-on-surface-variant'}`}>{saveError || (savedAt ? `Sincronizado a las ${savedAt}` : 'Los cambios se guardan automáticamente en este dispositivo.')}</p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <Button type="button" variant="primary" disabled={salaryRangeInvalid || phoneNumberInvalid || isSavingProfile} onClick={saveProfile}>{isSavingProfile ? 'Sincronizando…' : 'Guardar Cambios'}</Button>
+            <Button type="button" variant="primary" disabled={salaryRangeInvalid || phoneNumberInvalid || rutInvalid || isSavingProfile} onClick={saveProfile}>{isSavingProfile ? 'Sincronizando…' : 'Guardar Cambios'}</Button>
           </div>
         </div>
       </div>

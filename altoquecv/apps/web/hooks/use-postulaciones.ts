@@ -8,6 +8,16 @@ export function usePostulaciones() {
   const { accessToken } = useAuth();
   const [postulaciones, setPostulaciones] = useState<Postulacion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const getResponseError = async (response: Response, fallback: string) => {
+    const body = await response.json().catch(() => null);
+    const detail = typeof body?.detail === 'string' ? body.detail : '';
+    if (/(sql|postgres|postgrest|relation|column|constraint|stack trace)/i.test(detail)) {
+      return fallback;
+    }
+    return detail || fallback;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -20,15 +30,20 @@ export function usePostulaciones() {
       }
 
       setIsLoading(true);
+      setError(null);
       try {
         const response = await fetch(`${API_URL}/auth/postulaciones`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!response.ok) throw new Error('No fue posible cargar las postulaciones');
+        if (!response.ok) {
+          throw new Error(await getResponseError(response, 'No fue posible cargar las postulaciones.'));
+        }
         const data = await response.json();
         if (!cancelled) setPostulaciones(data);
-      } catch {
-        if (!cancelled) setPostulaciones([]);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'No fue posible conectar con el servidor.');
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -42,18 +57,25 @@ export function usePostulaciones() {
 
   const movePostulacion = async (id: string, nuevoStatus: PostulacionStatus) => {
     if (!accessToken) return;
-    const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ status: nuevoStatus }),
-    });
-    if (!response.ok) return;
-    setPostulaciones((prev) => prev.map((postulacion) =>
-      postulacion.id === id ? { ...postulacion, status: nuevoStatus } : postulacion
-    ));
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: nuevoStatus }),
+      });
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, 'No fue posible actualizar la postulación.'));
+      }
+      setPostulaciones((prev) => prev.map((postulacion) =>
+        postulacion.id === id ? { ...postulacion, status: nuevoStatus } : postulacion
+      ));
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : 'No fue posible actualizar la postulación.');
+    }
   };
 
   const createPostulacion = async (input: { cargo: string; empresa: string; url_oferta: string }) => {
@@ -77,12 +99,19 @@ export function usePostulaciones() {
 
   const deletePostulacion = async (id: string) => {
     if (!accessToken) return;
-    const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok) return;
-    setPostulaciones((prev) => prev.filter((postulacion) => postulacion.id !== id));
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/auth/postulaciones/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, 'No fue posible eliminar la postulación.'));
+      }
+      setPostulaciones((prev) => prev.filter((postulacion) => postulacion.id !== id));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'No fue posible eliminar la postulación.');
+    }
   };
 
   const getByStatus = (status: PostulacionStatus) =>
@@ -101,6 +130,7 @@ export function usePostulaciones() {
   return {
     postulaciones,
     isLoading,
+    error,
     movePostulacion,
     createPostulacion,
     deletePostulacion,

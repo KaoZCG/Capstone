@@ -1,9 +1,8 @@
 import type { PlasmoCSConfig } from "plasmo";
 declare const chrome: any;
 
-// 1. Este script SOLO se ejecutará en tu plataforma web
 export const config: PlasmoCSConfig = {
-  matches: ["http://localhost:3000/*", "http://127.0.0.1:3000/*"]
+  matches: ["http://localhost:3000/*", "http://127.0.0.1:3000/*"],
 };
 
 const AUTH_STORAGE_KEY = "altoquecv_auth_session";

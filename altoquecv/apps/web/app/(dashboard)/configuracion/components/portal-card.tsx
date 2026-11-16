@@ -11,11 +11,6 @@ interface PortalCardProps {
 }
 
 export function PortalCard({ portal, isSyncing, onSync, onToggleConnect }: PortalCardProps) {
-  const formatTime = (isoString?: string) => {
-    if (!isoString) return 'Nunca';
-    return new Date(isoString).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-  };
-
   return (
     <div className="bg-surface-container-low border border-border rounded-card p-5 flex flex-col justify-between transition-all hover:border-primary/30">
       <div className="flex justify-between items-start mb-4">
@@ -24,15 +19,15 @@ export function PortalCard({ portal, isSyncing, onSync, onToggleConnect }: Porta
           portal.conectado ? 'bg-success-container/20 text-success' : 'bg-surface-container-highest text-on-surface-variant'
         }`}>
           {portal.conectado ? <LinkIcon size={12} /> : <Unlink size={12} />}
-          {portal.conectado ? 'Conectado' : 'Desconectado'}
+          {portal.conectado ? 'Habilitado' : 'Deshabilitado'}
         </span>
       </div>
 
       <div className="mb-5 text-label-sm text-on-surface-variant">
         {portal.conectado ? (
-          <p>Última sync: <span className="font-medium text-on-surface">{formatTime(portal.ultimaSincronizacion)}</span></p>
+          <p>Preferencia local activa; la sincronización automática no está disponible.</p>
         ) : (
-          <p className="flex items-center gap-1"><AlertCircle size={14} /> Requiere login mediante extensión</p>
+          <p className="flex items-center gap-1"><AlertCircle size={14} /> Puedes habilitarlo como preferencia local.</p>
         )}
       </div>
 
@@ -54,7 +49,7 @@ export function PortalCard({ portal, isSyncing, onSync, onToggleConnect }: Porta
           </>
         ) : (
           <Button variant="primary" className="w-full gap-2 text-label-sm" onClick={onToggleConnect}>
-            Conectar Portal
+            Habilitar portal
           </Button>
         )}
       </div>

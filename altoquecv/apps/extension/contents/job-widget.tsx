@@ -1,7 +1,7 @@
 import type { PlasmoCSConfig, PlasmoGetStyle } from "plasmo";
 import { useEffect, useState } from "react";
 import { CompatibilityWidget } from "../components/CompatibilityWidget";
-import type { OfertaDetectada } from "../types/oferta";
+import type { CompatibilidadWidget, OfertaDetectada, WidgetProfileData } from "../types/oferta";
 import styleText from "data-text:../style.css";
 
 export const config: PlasmoCSConfig = {
@@ -9,9 +9,6 @@ export const config: PlasmoCSConfig = {
     "https://*.trabajando.com/*",
     "https://*.trabajando.cl/*",
     "https://*.laborum.cl/*",
-    "https://www.linkedin.com/jobs/*",
-    "https://*.chiletrabajos.cl/*",
-    "https://*.computrabajo.cl/*",
   ],
   all_frames: true,
 };
@@ -50,7 +47,7 @@ const profileTermCoverage = (values: string[], offerText: string) => {
 
 type OfferContext = OfertaDetectada;
 
-const extractNonLaborumOfferContext = (sourceDocument: Document, pageUrl: string): OfferContext | null => {
+const extractOfferContext = (sourceDocument: Document, pageUrl: string): OfferContext | null => {
   const url = new URL(pageUrl);
 
   const titleElement = sourceDocument.querySelector<HTMLElement>(
@@ -88,9 +85,11 @@ const extractNonLaborumOfferContext = (sourceDocument: Document, pageUrl: string
       ? "Remoto"
       : "Presencial";
   const hostname = url.hostname.toLowerCase();
-  const portal: OfertaDetectada["portal"] = hostname.includes("trabajando")
-    ? "trabajando"
-    : hostname.includes("linkedin")
+  const portal: OfertaDetectada["portal"] = hostname.includes("laborum")
+    ? "laborum"
+    : hostname.includes("trabajando")
+      ? "trabajando"
+      : hostname.includes("linkedin")
         ? "linkedin"
         : hostname.includes("chiletrabajos")
           ? "chile-trabajos"
@@ -170,7 +169,10 @@ const calculateMatch = (profile: any, offer: OfferContext) => {
 export default function JobWidget() {
   const [visible, setVisible] = useState(true);
   const [oferta, setOferta] = useState<OfferContext | null>(null);
-  const [compatibilidad, setCompatibilidad] = useState<any>(null);
+  const [compatibilidad, setCompatibilidad] = useState<CompatibilidadWidget | null>(null);
+  const [profileData, setProfileData] = useState<WidgetProfileData | null>(null);
+  const [detectedFieldCount, setDetectedFieldCount] = useState(0);
+  const [aiResponseStatus, setAiResponseStatus] = useState("Aún no generada");
 
   useEffect(() => {
     let activeKey = "";
@@ -212,61 +214,57 @@ export default function JobWidget() {
         const profileResponse = await chrome.runtime.sendMessage({ type: "ALTOQUE_OBTENER_PERFIL" });
         if (version !== requestVersion || activeKey !== key) return;
         if (profileResponse?.exito === false) {
+          setProfileData(null);
           setCompatibilidad({
             scoreGeneral: 0,
-            desglose: { skillsTecnicos: 0, nivelExperiencia: 0, formacionAcademica: 0 },
+            desglose: { skillsTecnicos: 0, pretensionSalarial: 0, nivelExperiencia: 0, formacionAcademica: 0 },
             mensaje: profileResponse.detail || "Inicia sesión en la extensión para comparar tu Perfil Maestro.",
             mapeoCampos: { total: 0, completados: 0 },
+            datosDetectados: {
+              rut: { valor: "", validado: false },
+              telefono: { valor: "", validado: false },
+              rentaPretendida: { valor: 0, optimizada: false },
+            },
           });
           return;
         }
 
+        const profile: WidgetProfileData = profileResponse;
+        setProfileData(profile);
         const result = calculateMatch(profileResponse, currentOffer);
+        const mappedFields = [profile.rut, profile.phone, profile.salary_min]
+          .filter((value) => value !== null && value !== undefined && value !== "").length;
         setCompatibilidad({
           scoreGeneral: result.score,
           desglose: {
             skillsTecnicos: result.skillsScore,
+            pretensionSalarial: 0,
             nivelExperiencia: result.experienceScore,
             formacionAcademica: result.educationScore,
           },
           mensaje: result.mensaje,
-          mapeoCampos: { total: 0, completados: 0 },
+          mapeoCampos: { total: 3, completados: mappedFields },
+          datosDetectados: {
+            rut: { valor: profile.rut || "", validado: Boolean(profile.rut) },
+            telefono: { valor: profile.phone || "", validado: Boolean(profile.phone) },
+            rentaPretendida: { valor: profile.salary_min || 0, optimizada: false },
+          },
         });
       } catch (error) {
         console.error("Error calculando compatibilidad:", error);
         if (version !== requestVersion || activeKey !== key) return;
+        setProfileData(null);
         setCompatibilidad({
           scoreGeneral: 0,
-          desglose: { skillsTecnicos: 0, nivelExperiencia: 0, formacionAcademica: 0 },
+          desglose: { skillsTecnicos: 0, pretensionSalarial: 0, nivelExperiencia: 0, formacionAcademica: 0 },
           mensaje: "No se pudo cargar tu Perfil Maestro. Verifica tu sesión y que AltoqueCV esté conectado.",
           mapeoCampos: { total: 0, completados: 0 },
+          datosDetectados: {
+            rut: { valor: "", validado: false },
+            telefono: { valor: "", validado: false },
+            rentaPretendida: { valor: 0, optimizada: false },
+          },
         });
-      }
-    };
-
-    const loadSavedLaborumOffer = async (pageUrl: string, key: string) => {
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: "ALTOQUE_OBTENER_OFERTA_LABORUM",
-          url: pageUrl,
-        });
-        if (activeKey !== key || !response?.exito || !response.oferta) return;
-
-        const savedOffer = response.oferta;
-        const context: OfferContext = {
-          titulo: savedOffer.titulo,
-          empresa: savedOffer.empresa,
-          ubicacion: savedOffer.ubicacion,
-          portal: "laborum",
-          url: pageUrl,
-          descripcion: savedOffer.notas_usuario || undefined,
-        };
-        setOferta(context);
-        setCompatibilidad(null);
-        setVisible(true);
-        void loadMatch(context, key);
-      } catch (error) {
-        console.info("AltoqueCV: No se pudo cargar la oferta ingresada manualmente.", error);
       }
     };
 
@@ -279,6 +277,9 @@ export default function JobWidget() {
         requestVersion += 1;
         setOferta(null);
         setCompatibilidad(null);
+        setProfileData(null);
+        setDetectedFieldCount(0);
+        setAiResponseStatus("Aún no generada");
         setVisible(true);
       }
 
@@ -293,34 +294,28 @@ export default function JobWidget() {
       } catch {
         return;
       }
-      // En Laborum solo se muestra una oferta registrada manualmente en AltoqueCV.
-      // Esta ruta no lee el título ni la descripción del documento de Laborum.
-      if (/(^|\.)laborum\.cl$/i.test(pageHost)) {
-        const key = `laborum:${canonicalPageUrl}`;
-        if (key === activeKey) return;
-        activeKey = key;
-        setOferta(null);
-        setCompatibilidad(null);
-        void loadSavedLaborumOffer(canonicalPageUrl, key);
-        return;
-      }
-
-      const context = extractNonLaborumOfferContext(sourceDocument, pageUrl);
+      const context = extractOfferContext(sourceDocument, pageUrl);
       if (!context) {
         if (activeKey) {
           activeKey = "";
           requestVersion += 1;
           setOferta(null);
           setCompatibilidad(null);
+          setProfileData(null);
+          setDetectedFieldCount(0);
+          setAiResponseStatus("Aún no generada");
         }
         return;
       }
 
-      const key = [context.url, context.titulo, context.descripcion?.length || 0].join("|");
+      const key = [canonicalPageUrl, context.titulo, context.descripcion?.length || 0].join("|");
       if (key === activeKey) return;
       activeKey = key;
       setOferta(context);
       setCompatibilidad(null);
+      setProfileData(null);
+      setDetectedFieldCount(0);
+      setAiResponseStatus("Aún no generada");
       setVisible(true);
       void loadMatch(context, key);
     };
@@ -357,6 +352,11 @@ export default function JobWidget() {
     <CompatibilityWidget
       oferta={oferta}
       compatibilidad={compatibilidad}
+      profileData={profileData}
+      detectedFieldCount={detectedFieldCount}
+      onDetectedFieldCountChange={setDetectedFieldCount}
+      aiResponseStatus={aiResponseStatus}
+      onAiResponseStatusChange={setAiResponseStatus}
       cargando={!compatibilidad}
       onClose={() => setVisible(false)}
     />

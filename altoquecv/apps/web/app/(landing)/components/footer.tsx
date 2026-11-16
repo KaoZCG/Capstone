@@ -1,5 +1,6 @@
 import React from 'react';
 import { ShieldCheck } from 'lucide-react';
+import Link from 'next/link';
 
 export function Footer() {
   return (
@@ -20,31 +21,31 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-bold text-on-surface text-sm mb-4">Producto</h4>
+            <h3 className="font-bold text-on-surface text-sm mb-4">Producto</h3>
             <ul className="space-y-3 text-sm text-on-surface-variant">
-              <li><a href="#" className="hover:text-primary">Características</a></li>
-              <li><a href="#" className="hover:text-primary">Cómo funciona</a></li>
-              <li><a href="#" className="hover:text-primary">Plantillas ATS</a></li>
-              <li><a href="#precios" className="hover:text-primary">Precios</a></li>
+              <li><Link href="/#caracteristicas" className="hover:text-primary">Características</Link></li>
+              <li><Link href="/#como-funciona" className="hover:text-primary">Cómo funciona</Link></li>
+              <li><Link href="/#comparador-ats" className="hover:text-primary">Comparador ATS</Link></li>
+              <li><span>Planes de pago: próximamente</span></li>
             </ul>
           </div>
 
           <div>
-            <h4 className="font-bold text-on-surface text-sm mb-4">Recursos</h4>
+            <h3 className="font-bold text-on-surface text-sm mb-4">Recursos</h3>
             <ul className="space-y-3 text-sm text-on-surface-variant">
-              <li><a href="#" className="hover:text-primary">Casos de Éxito</a></li>
-              <li><a href="#" className="hover:text-primary">Guía ATS 2025</a></li>
-              <li><a href="#" className="hover:text-primary">Blog de Carrera</a></li>
-              <li><a href="#" className="hover:text-primary">Centro de Ayuda</a></li>
+              <li><Link href="/#testimonios" className="hover:text-primary">Casos de Éxito</Link></li>
+              <li><span>Guía ATS: próximamente</span></li>
+              <li><span>Blog de Carrera: próximamente</span></li>
+              <li><span>Centro de Ayuda: próximamente</span></li>
             </ul>
           </div>
 
           <div>
-            <h4 className="font-bold text-on-surface text-sm mb-4">Legal & Empresa</h4>
+            <h3 className="font-bold text-on-surface text-sm mb-4">Legal & Empresa</h3>
             <ul className="space-y-3 text-sm text-on-surface-variant">
-              <li><a href="#" className="hover:text-primary">Política de Privacidad</a></li>
-              <li><a href="#" className="hover:text-primary">Términos del Servicio</a></li>
-              <li><a href="#" className="hover:text-primary">Seguridad de Datos</a></li>
+              <li><span>Política de Privacidad: próximamente</span></li>
+              <li><span>Términos del Servicio: próximamente</span></li>
+              <li><span>Seguridad de Datos: próximamente</span></li>
               <li><span className="text-on-surface-variant/70">Santiago, Chile</span></li>
             </ul>
           </div>

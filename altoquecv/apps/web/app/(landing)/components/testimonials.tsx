@@ -26,7 +26,7 @@ export function Testimonials() {
               <div className="flex items-center gap-4 mb-6">
                 <img src={t.avatar} alt={t.nombre} className="w-12 h-12 rounded-full object-cover bg-surface-container-highest" />
                 <div>
-                  <h4 className="font-bold text-sm text-on-surface">{t.nombre}</h4>
+                  <h3 className="font-bold text-sm text-on-surface">{t.nombre}</h3>
                   <p className="text-xs text-on-surface-variant">{t.rol}</p>
                 </div>
               </div>

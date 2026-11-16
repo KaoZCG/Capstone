@@ -26,3 +26,12 @@ export interface CompatibilidadWidget {
     rentaPretendida: { valor: number; optimizada: boolean };
   };
 }
+
+export interface WidgetProfileData {
+  rut?: string | null;
+  phone?: string | null;
+  salary_min?: number | null;
+  skills?: string[];
+  experience?: { role?: string; stackTags?: string[] }[];
+  education?: { degree?: string; tags?: string[] }[];
+}

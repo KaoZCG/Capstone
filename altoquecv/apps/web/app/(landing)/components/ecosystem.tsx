@@ -2,11 +2,11 @@ import React from 'react';
 
 export function Ecosystem() {
   const portales = [
-    { initial: 'L', name: 'Laborum.cl', badge: 'Autollenado 100%' },
-    { initial: 'T', name: 'Trabajando.com', badge: 'Preguntas IA' },
-    { initial: 'In', name: 'LinkedIn Jobs', badge: 'Easy Apply' },
-    { initial: 'Ch', name: 'ChileTrabajos', badge: 'Envío nativo' },
-    { initial: 'Co', name: 'Computrabajo', badge: 'Mapeo CLP' },
+    { initial: 'L', name: 'Laborum.cl', badge: 'Autollenado 100%', status: 'Integrado' },
+    { initial: 'T', name: 'Trabajando.com', badge: 'Preguntas IA', status: 'Integrado' },
+    { initial: 'In', name: 'LinkedIn Jobs', badge: 'Soporte en desarrollo', status: 'Próximamente' },
+    { initial: 'Ch', name: 'ChileTrabajos', badge: 'Soporte en desarrollo', status: 'Próximamente' },
+    { initial: 'Co', name: 'Computrabajo', badge: 'Soporte en desarrollo', status: 'Próximamente' },
   ];
 
   return (
@@ -15,7 +15,7 @@ export function Ecosystem() {
         <div className="text-center mb-16">
           <span className="text-primary text-xs font-bold uppercase tracking-widest mb-2 block">Ecosistema Laboral</span>
           <h2 className="text-3xl font-bold text-on-surface mb-4">Diseñado exclusivamente para Chile</h2>
-          <p className="text-on-surface-variant max-w-2xl mx-auto">A diferencia de herramientas genéricas, AltoqueCV se integra de forma nativa con los portales donde se concentra el empleo en el país.</p>
+          <p className="text-on-surface-variant max-w-2xl mx-auto">Actualmente integramos la extensión con Laborum y Trabajando.com; pronto sumaremos más portales.</p>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -26,8 +26,12 @@ export function Ecosystem() {
               </div>
               <h3 className="font-bold text-on-surface text-sm mb-1">{p.name}</h3>
               <p className="text-[10px] text-on-surface-variant mb-4">{p.badge}</p>
-              <span className="inline-block bg-success-container/20 border border-success/30 text-success text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
-                Integrado
+              <span className={`inline-block border text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                p.status === 'Integrado'
+                  ? 'bg-success-container/20 border-success/30 text-success'
+                  : 'bg-surface-container border-border text-on-surface-variant'
+              }`}>
+                {p.status}
               </span>
             </div>
           ))}

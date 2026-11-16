@@ -36,7 +36,7 @@ export function CTAFinal() {
                 {isAuthenticated ? 'Continuar a Mi Perfil' : 'Crear mi Perfil Maestro Gratis'} <ArrowRight size={18} className="ml-2" />
               </Button>
             </Link>
-            <p className="text-center text-xs text-[#71717a] mt-4">
+            <p className="text-center text-xs text-[#a1a1aa] mt-4">
               Compatible con cuentas de Google y LinkedIn.
             </p>
           </div>

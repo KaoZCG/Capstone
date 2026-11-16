@@ -1,20 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Sun, Moon } from 'lucide-react';
+import { useTheme } from '@/components/layout/ThemeProvider';
 
 export function LandingHeader() {
-  const [darkMode, setDarkMode] = useState(false);
-
-  // Alternar Modo Oscuro (Modificación de clase en html/body para Tailwind)
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
+  const { toggleTheme } = useTheme();
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border bg-surface/80 backdrop-blur-md px-6 py-4">
@@ -39,15 +30,13 @@ export function LandingHeader() {
 
           {/* Botón Modo Oscuro */}
           <button
-            onClick={() => setDarkMode(!darkMode)}
+            type="button"
+            onClick={toggleTheme}
             className="p-2 rounded-lg bg-surface-container-low border border-border text-on-surface-variant hover:text-on-surface transition-all flex items-center gap-1.5"
             aria-label="Alternar modo oscuro"
           >
-            {darkMode ? (
-              <Sun size={18} className="text-amber-500" />
-            ) : (
-              <Moon size={18} className="text-slate-700" />
-            )}
+            <Moon size={18} aria-hidden="true" className="block text-slate-700 dark:hidden" />
+            <Sun size={18} aria-hidden="true" className="hidden text-amber-500 dark:block" />
           </button>
 
           {/* Acceso a Auth */}

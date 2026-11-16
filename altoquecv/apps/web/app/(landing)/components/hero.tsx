@@ -10,7 +10,7 @@ export function HeroSection() {
   const { isAuthenticated } = useAuth();
 
   return (
-    <section className="relative pt-20 pb-32 overflow-hidden">
+    <section id="inicio" className="relative pt-20 pb-32 overflow-hidden">
       {/* Fondo Gradiente Sutil */}
       <div className="absolute inset-0 bg-gradient-to-br from-primary-container/20 via-surface to-surface-container z-0" />
       
@@ -26,7 +26,7 @@ export function HeroSection() {
           </h1>
           
           <p className="text-lg text-on-surface-variant mb-8 leading-relaxed max-w-xl">
-            AltoqueCV autocompleta tus postulaciones en Laborum, Trabajando.com y LinkedIn, optimizando tu CV en tiempo real para superar los filtros ATS con IA especializada en el mercado chileno.
+            AltoqueCV te ayuda con tus postulaciones en Laborum y Trabajando.com, y optimiza tu CV para superar los filtros ATS con IA especializada en el mercado chileno.
           </p>
           
           <div className="flex flex-col sm:flex-row gap-4 mb-12">
@@ -35,9 +35,11 @@ export function HeroSection() {
                 {isAuthenticated ? 'Ir a Mi Perfil Maestro' : 'Comenzar gratis ahora'} <ArrowRight size={18} className="ml-2" />
               </Button>
             </Link>
-            <Button variant="secondary" className="h-12 px-8 text-base w-full sm:w-auto bg-surface-container-high border-transparent text-on-surface">
-              <PlayCircle size={18} className="mr-2 text-primary" /> Ver demostración
-            </Button>
+            <Link href="#como-funciona">
+              <Button variant="secondary" className="h-12 px-8 text-base w-full sm:w-auto bg-surface-container-high border-transparent text-on-surface">
+                <PlayCircle size={18} className="mr-2 text-primary" /> Ver demostración
+              </Button>
+            </Link>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
@@ -72,8 +74,8 @@ export function HeroSection() {
             </div>
             
             <div className="mb-6 border-b border-surface-container-highest pb-4">
-              <span className="text-[10px] font-bold text-primary mb-1 block uppercase tracking-wider">LinkedIn Jobs / Laborum.cl</span>
-              <h3 className="font-bold text-lg text-on-surface">Tech Lead • Fintech LATAM</h3>
+              <span className="text-[10px] font-bold text-primary mb-1 block uppercase tracking-wider">Laborum.cl / Trabajando.com</span>
+              <h2 className="font-bold text-lg text-on-surface">Tech Lead • Fintech LATAM</h2>
               <p className="text-xs text-on-surface-variant">Santiago, Chile (Híbrido) • Renta acorde a mercado</p>
             </div>
 
@@ -86,7 +88,7 @@ export function HeroSection() {
                 <span className="absolute text-lg font-bold text-on-surface">84%</span>
               </div>
               <div>
-                <h4 className="font-bold text-sm text-on-surface flex items-center gap-1">Calificación ATS Alta <CheckCircle2 size={14} className="text-success"/></h4>
+                <h3 className="font-bold text-sm text-on-surface flex items-center gap-1">Calificación ATS Alta <CheckCircle2 size={14} className="text-success"/></h3>
                 <p className="text-[10px] text-on-surface-variant mt-1">Tu CV supera el umbral de filtrado automático (mínimo 75%).</p>
               </div>
             </div>
@@ -100,10 +102,10 @@ export function HeroSection() {
               </div>
             </div>
 
-            <Button variant="primary" className="w-full justify-between h-10 px-4 text-sm shadow-md">
+            <div aria-hidden="true" className="flex w-full justify-between rounded-button bg-primary px-4 py-2 text-sm text-on-primary shadow-md">
               <span className="flex items-center gap-2">✨ Autocompletar</span>
               <span className="bg-white/20 px-2 py-0.5 rounded text-[10px]">14/14</span>
-            </Button>
+            </div>
           </div>
         </div>
       </div>

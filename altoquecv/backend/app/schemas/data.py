@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic import SecretStr
 
 
@@ -9,6 +9,7 @@ class ProfileResponse(BaseModel):
     user_id: str
     email: str
     account_status: str
+    subscription_plan: Literal["free", "premium"] = "free"
     rut: str
     first_name: str
     last_name: str
@@ -38,20 +39,53 @@ class PostulacionStatusRequest(BaseModel):
 class PostulacionCreateRequest(BaseModel):
     cargo: str = Field(min_length=1, max_length=200)
     empresa: str = Field(min_length=1, max_length=200)
+    compatibilidad: float | None = Field(default=None, ge=0, le=100)
     url_oferta: str = Field(min_length=1, max_length=2048)
+    tipo: Literal["laborum", "trabajando"] = "laborum"
+
+    @model_validator(mode="after")
+    def validate_offer_portal(self) -> "PostulacionCreateRequest":
+        _validate_offer_url_for_portal(self.url_oferta, self.tipo)
+        return self
 
     @field_validator("url_oferta")
     @classmethod
-    def validate_laborum_application_url(cls, value: str) -> str:
+    def normalize_application_url(cls, value: str) -> str:
         parsed = urlsplit(value.strip())
         host = (parsed.hostname or "").lower()
         if (
             parsed.scheme != "https"
-            or not (host == "laborum.cl" or host.endswith(".laborum.cl"))
-            or not parsed.path.startswith("/empleos/")
+            or not (
+                host == "laborum.cl"
+                or host.endswith(".laborum.cl")
+                or host == "trabajando.cl"
+                or host.endswith(".trabajando.cl")
+                or host == "trabajando.com"
+                or host.endswith(".trabajando.com")
+            )
         ):
-            raise ValueError("La URL debe corresponder a una vacante de Laborum Chile.")
+            raise ValueError("La URL debe corresponder a una vacante de Laborum o Trabajando.")
         return parsed._replace(query="", fragment="").geturl()
+
+
+def _validate_offer_url_for_portal(value: str, portal: str) -> None:
+    host = (urlsplit(value).hostname or "").lower()
+    if portal == "laborum":
+        is_valid_host = host == "laborum.cl" or host.endswith(".laborum.cl")
+    else:
+        is_valid_host = (
+            host == "trabajando.cl"
+            or host.endswith(".trabajando.cl")
+            or host == "trabajando.com"
+            or host.endswith(".trabajando.com")
+        )
+    if not is_valid_host:
+        raise ValueError("El tipo de portal no coincide con la URL de la vacante.")
+
+
+class PreguntaRespuestaPostulacion(BaseModel):
+    pregunta: str = Field(min_length=1, max_length=1000)
+    respuesta: str = Field(default="", max_length=2000)
 
 
 class PostulacionResponse(BaseModel):
@@ -62,7 +96,9 @@ class PostulacionResponse(BaseModel):
     compatibilidad: float
     status: str
     fechaPostulacion: str
+    tipo: Literal["laborum", "trabajando"] = "laborum"
     url_oferta: str | None = None
+    preguntas_respuestas: list[PreguntaRespuestaPostulacion] = Field(default_factory=list)
 
 
 class OfertaLaborumInput(BaseModel):
@@ -114,7 +150,33 @@ class IAAutocompletarRequest(BaseModel):
     preguntas: List[str] = Field(min_length=1, max_length=20)
     cargo_postulacion: str = Field(min_length=1, max_length=200)
     empresa: str = Field(min_length=1, max_length=200)
+    tipo: Literal["laborum", "trabajando"]
+    url_oferta: str = Field(min_length=1, max_length=2048)
     descripcion_oferta: str = Field(default="", max_length=6000)
+
+    @field_validator("url_oferta")
+    @classmethod
+    def normalize_offer_url(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or not (
+                host == "laborum.cl"
+                or host.endswith(".laborum.cl")
+                or host == "trabajando.cl"
+                or host.endswith(".trabajando.cl")
+                or host == "trabajando.com"
+                or host.endswith(".trabajando.com")
+            )
+        ):
+            raise ValueError("La URL debe corresponder a una vacante de Laborum o Trabajando.")
+        return parsed._replace(query="", fragment="").geturl()
+
+    @model_validator(mode="after")
+    def validate_offer_portal(self) -> "IAAutocompletarRequest":
+        _validate_offer_url_for_portal(self.url_oferta, self.tipo)
+        return self
 
 
 class PerfilResumenExperienciaRequest(BaseModel):
@@ -166,9 +228,17 @@ class PerfilMaestroSyncRequest(BaseModel):
     skills: List[str] = Field(default_factory=list)
     salaryData: Dict[str, Any] = Field(default_factory=dict)
 
+class IAUsoDiarioResponse(BaseModel):
+    subscription_plan: Literal["free", "premium"]
+    usos_hoy: int
+    limite_diario: int | None = None
+    restantes: int | None = None
+
+
 class IARespuesta(BaseModel):
     exito: bool
     respuestas: list[str]
+    uso_diario: IAUsoDiarioResponse | None = None
 
 
 class CVExperienceDraft(BaseModel):

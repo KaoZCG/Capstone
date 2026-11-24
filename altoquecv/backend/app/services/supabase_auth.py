@@ -22,6 +22,7 @@ from app.schemas.auth import (
     RefreshTokenRequest,
 )
 from app.schemas.data import (
+    IAAutocompletarRequest,
     OfertaLaborumInput,
     OfertaLaborumResponse,
     PerfilMaestroSyncRequest,
@@ -380,12 +381,14 @@ class SupabaseAuthService:
         self._require_admin_headers()
         await self._sync_login_user(auth_response)
         await self._ensure_active_account(auth_response.user_id)
+        auth_response.subscription_plan = await self.subscription_plan(auth_response.user_id)
         try:
             profile = await self.profile(auth_response.user_id)
             auth_response.first_name = profile.first_name
             auth_response.last_name = profile.last_name
             auth_response.rut = profile.rut
             auth_response.telefono = profile.phone
+            auth_response.subscription_plan = profile.subscription_plan
         except AuthServiceError:
             # El perfil extendido es opcional para completar la respuesta de login.
             pass
@@ -424,6 +427,8 @@ class SupabaseAuthService:
         auth_response = self._parse_response(response, registration=False)
         if not auth_response.access_token or not auth_response.refresh_token:
             raise AuthServiceError("Supabase no devolvió una sesión renovada", status_code=502)
+        if auth_response.user_id:
+            auth_response.subscription_plan = await self.subscription_plan(auth_response.user_id)
         return auth_response
 
     async def _ensure_active_account(self, user_id: str) -> None:
@@ -504,8 +509,10 @@ class SupabaseAuthService:
             last_name=metadata.get("last_name"),
             rut=metadata.get("rut"),
             telefono=metadata.get("telefono"),
+            subscription_plan="free",
             email_confirmed_at=data.get("email_confirmed_at"),
         )
+        current_user.subscription_plan = await self.subscription_plan(current_user.user_id)
         if self._admin_headers:
             try:
                 profile = await self.profile(current_user.user_id)
@@ -513,9 +520,27 @@ class SupabaseAuthService:
                 current_user.last_name = profile.last_name
                 current_user.rut = profile.rut
                 current_user.telefono = profile.phone
+                current_user.subscription_plan = profile.subscription_plan
             except AuthServiceError:
                 pass
         return current_user
+
+    async def subscription_plan(self, user_id: str) -> str:
+        """Lee el plan de la cuenta desde la tabla interna, nunca desde el cliente."""
+        rows = await self._rest_get(
+            "usuarios",
+            {
+                "select": "plan_suscripcion",
+                "id": f"eq.{user_id}",
+                "limit": "1",
+            },
+        )
+        if not rows:
+            raise AuthServiceError("No se encontró el plan de la cuenta", 404)
+        plan = rows[0].get("plan_suscripcion", "free")
+        if plan not in {"free", "premium"}:
+            raise AuthServiceError("El plan de la cuenta no es válido", 502)
+        return plan
 
     async def sync_profile(self, user_id: str, payload: PerfilMaestroSyncRequest) -> None:
         """Persiste el Perfil Maestro únicamente dentro del perfil autenticado."""
@@ -797,6 +822,16 @@ class SupabaseAuthService:
 
         stale_ids = current_ids - matched_ids
         if stale_ids:
+            if not is_education:
+                await self._delete_profile_rows(
+                    table,
+                    {
+                        "perfil_id": f"eq.{profile_id}",
+                        "id": f"in.({','.join(sorted(stale_ids))})",
+                    },
+                )
+                return
+
             empty_values = (
                 {
                     "institucion": None,
@@ -883,7 +918,7 @@ class SupabaseAuthService:
         user_rows, profile_rows = await asyncio.gather(
             self._rest_get(
                 "usuarios",
-                {"select": "id,correo_electronico,estado_cuenta", "id": f"eq.{user_id}"},
+                {"select": "id,correo_electronico,estado_cuenta,plan_suscripcion", "id": f"eq.{user_id}"},
             ),
             self._rest_get(
                 "perfiles_candidatos",
@@ -926,6 +961,7 @@ class SupabaseAuthService:
             user_id=user["id"],
             email=user["correo_electronico"],
             account_status=user.get("estado_cuenta", "activo"),
+            subscription_plan=user.get("plan_suscripcion", "free"),
             rut=profile["rut_identificador"],
             first_name=profile["nombres"],
             last_name=profile["apellidos"],
@@ -968,7 +1004,7 @@ class SupabaseAuthService:
         rows = await self._rest_get(
             "tablero_postulaciones",
             {
-                "select": "id,empresa_objetivo,titulo_vacante,estado_fase,fecha_creacion,url_oferta",
+                "select": "id,empresa_objetivo,titulo_vacante,estado_fase,fecha_creacion,url_oferta,tipo,preguntas_respuestas,compatibilidad",
                 "usuario_id": f"eq.{user_id}",
                 "order": "fecha_creacion.desc",
             },
@@ -994,10 +1030,16 @@ class SupabaseAuthService:
                 empresa={"id": row["empresa_objetivo"], "nombre": row["empresa_objetivo"]},
                 cargo=row["titulo_vacante"],
                 ubicacion="",
-                compatibilidad=compatibility.get(row["id"], 0),
+                compatibilidad=float(
+                    row["compatibilidad"]
+                    if row.get("compatibilidad") is not None
+                    else compatibility.get(row["id"], 0)
+                ),
                 status=self._to_frontend_status(row.get("estado_fase")),
                 fechaPostulacion=row["fecha_creacion"],
+                tipo=row.get("tipo") or "laborum",
                 url_oferta=row.get("url_oferta"),
+                preguntas_respuestas=row.get("preguntas_respuestas") or [],
             )
             for row in rows
         ]
@@ -1006,8 +1048,20 @@ class SupabaseAuthService:
         """Registra la postulación confirmada por el usuario, limitada a su propia cuenta."""
         self._require_admin_headers()
         url = payload.url_oferta
+        usage_rows = await self._rest_get(
+            "usos_ia_postulaciones",
+            {
+                "select": "preguntas_respuestas",
+                "usuario_id": f"eq.{user_id}",
+                "url_oferta": f"eq.{url}",
+                "estado": "eq.completed",
+                "order": "fecha_chile.desc",
+                "limit": "1",
+            },
+        )
+        questions_answers = usage_rows[0].get("preguntas_respuestas", []) if usage_rows else []
         params = {
-            "select": "id,empresa_objetivo,titulo_vacante,estado_fase,fecha_creacion,url_oferta",
+            "select": "id,empresa_objetivo,titulo_vacante,estado_fase,fecha_creacion,url_oferta,tipo,preguntas_respuestas,compatibilidad",
             "usuario_id": f"eq.{user_id}",
             "url_oferta": f"eq.{url}",
             "limit": "1",
@@ -1028,6 +1082,9 @@ class SupabaseAuthService:
                     "estado_fase": "Pendiente",
                     "fecha_creacion": now,
                     "url_oferta": url,
+                    "tipo": payload.tipo,
+                    "preguntas_respuestas": questions_answers,
+                    "compatibilidad": payload.compatibilidad,
                 }],
             )
             if response.is_error:
@@ -1041,16 +1098,49 @@ class SupabaseAuthService:
             saved = rows[0] if rows else None
         if saved is None:
             raise AuthServiceError("No fue posible confirmar el registro de la postulación", 502)
+        should_update_compatibility = (
+            payload.compatibilidad is not None
+            and saved.get("compatibilidad") != payload.compatibilidad
+        )
+        if rows and (
+            questions_answers
+            or saved.get("tipo") != payload.tipo
+            or should_update_compatibility
+        ):
+            updates: dict[str, Any] = {
+                "tipo": payload.tipo,
+                "preguntas_respuestas": questions_answers or saved.get("preguntas_respuestas") or [],
+            }
+            if payload.compatibilidad is not None:
+                updates["compatibilidad"] = payload.compatibilidad
+            response = await self._client.patch(
+                f"{self._base_url}/rest/v1/tablero_postulaciones",
+                headers={**self._admin_headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{saved['id']}", "usuario_id": f"eq.{user_id}"},
+                json=updates,
+            )
+            if response.is_error:
+                raise AuthServiceError(self._database_error(response, "No fue posible actualizar la postulación"), 502)
+            saved["tipo"] = payload.tipo
+            saved["preguntas_respuestas"] = updates["preguntas_respuestas"]
+            if payload.compatibilidad is not None:
+                saved["compatibilidad"] = payload.compatibilidad
 
         return PostulacionResponse(
             id=saved["id"],
             empresa={"id": saved["empresa_objetivo"], "nombre": saved["empresa_objetivo"]},
             cargo=saved["titulo_vacante"],
             ubicacion="",
-            compatibilidad=0,
+            compatibilidad=float(
+                saved["compatibilidad"]
+                if saved.get("compatibilidad") is not None
+                else payload.compatibilidad or 0
+            ),
             status=self._to_frontend_status(saved.get("estado_fase")),
             fechaPostulacion=saved["fecha_creacion"],
+            tipo=saved.get("tipo") or payload.tipo,
             url_oferta=saved.get("url_oferta"),
+            preguntas_respuestas=saved.get("preguntas_respuestas") or [],
         )
 
     async def save_laborum_offers(self, user_id: str, offers: list[OfertaLaborumInput]) -> int:
@@ -1142,94 +1232,129 @@ class SupabaseAuthService:
         if not response.json():
             raise AuthServiceError("No se encontró la postulación solicitada", 404)
 
-    async def ai_provider_credential(self, user_id: str) -> dict[str, Any] | None:
-        rows = await self._rest_get(
-            "credenciales_proveedores_ia",
-            {
-                "select": "id,proveedor,nombre,modelo_id,api_key_cifrada,version_cifrado,es_activa",
-                "usuario_id": f"eq.{user_id}",
-                "proveedor": "eq.openrouter",
-                "nombre": "eq.OpenRouter",
-                "order": "actualizada_en.desc",
-                "limit": "1",
-            },
-        )
-        return rows[0] if rows else None
-
-    async def save_ai_provider_credential(
+    async def reserve_ai_application_usage(
         self,
         user_id: str,
-        encrypted_api_key: str,
-        model_id: str | None,
-        activate: bool,
+        payload: IAAutocompletarRequest,
     ) -> dict[str, Any]:
+        """Reserva de forma atómica el cupo diario asociado a una vacante."""
         self._require_admin_headers()
-        url = f"{self._base_url}/rest/v1/credenciales_proveedores_ia"
-        row = {
-            "usuario_id": user_id,
-            "proveedor": "openrouter",
-            "nombre": "OpenRouter",
-            "modelo_id": model_id,
-            "api_key_cifrada": encrypted_api_key,
-            "version_cifrado": 1,
-            "es_activa": False,
-            "actualizada_en": datetime.now(timezone.utc).isoformat(),
-        }
         response = await self._client.post(
-            url,
-            headers={**self._admin_headers, "Prefer": "resolution=merge-duplicates,return=representation"},
-            params={"on_conflict": "usuario_id,proveedor,nombre"},
-            json=row,
-        )
-        if response.is_error:
-            raise AuthServiceError(self._database_error(response, "No fue posible guardar la credencial de OpenRouter"), 502)
-        saved_rows = response.json()
-        if not isinstance(saved_rows, list) or not saved_rows or not isinstance(saved_rows[0].get("id"), str):
-            raise AuthServiceError("Supabase no confirmó el guardado de la credencial de OpenRouter", 502)
-        credential_id = saved_rows[0]["id"]
-
-        if activate:
-            deactivate_response = await self._client.patch(
-                url,
-                headers={**self._admin_headers, "Prefer": "return=minimal"},
-                params={
-                    "usuario_id": f"eq.{user_id}",
-                    "es_activa": "eq.true",
-                    "id": f"neq.{credential_id}",
-                },
-                json={"es_activa": False, "actualizada_en": datetime.now(timezone.utc).isoformat()},
-            )
-            if deactivate_response.is_error:
-                raise AuthServiceError(
-                    self._database_error(deactivate_response, "No fue posible actualizar el proveedor seleccionado"),
-                    502,
-                )
-            activate_response = await self._client.patch(
-                url,
-                headers={**self._admin_headers, "Prefer": "return=minimal"},
-                params={"id": f"eq.{credential_id}", "usuario_id": f"eq.{user_id}"},
-                json={"es_activa": True, "actualizada_en": datetime.now(timezone.utc).isoformat()},
-            )
-            if activate_response.is_error:
-                raise AuthServiceError(
-                    self._database_error(activate_response, "No fue posible activar el modelo de OpenRouter"),
-                    502,
-                )
-        return saved_rows[0]
-
-    async def delete_ai_provider_credential(self, user_id: str) -> None:
-        self._require_admin_headers()
-        response = await self._client.delete(
-            f"{self._base_url}/rest/v1/credenciales_proveedores_ia",
+            f"{self._base_url}/rest/v1/rpc/reservar_uso_ia_postulacion",
             headers=self._admin_headers,
-            params={
-                "usuario_id": f"eq.{user_id}",
-                "proveedor": "eq.openrouter",
-                "nombre": "eq.OpenRouter",
+            json={
+                "p_usuario_id": user_id,
+                "p_url_oferta": payload.url_oferta,
+                "p_tipo": payload.tipo,
+                "p_cargo": payload.cargo_postulacion,
+                "p_empresa": payload.empresa,
+                "p_preguntas": [
+                    {"pregunta": question, "respuesta": ""}
+                    for question in payload.preguntas
+                ],
             },
         )
         if response.is_error:
-            raise AuthServiceError(self._database_error(response, "No fue posible eliminar la credencial de OpenRouter"), 502)
+            raise AuthServiceError(
+                self._database_error(response, "No fue posible reservar el uso diario de IA"),
+                502,
+            )
+        result = response.json()
+        row = result[0] if isinstance(result, list) and result else result
+        if not isinstance(row, dict):
+            raise AuthServiceError("La base de datos devolvió un cupo de IA inválido", 502)
+        if row.get("subscription_plan") not in {"free", "premium"}:
+            raise AuthServiceError("El plan del usuario no es válido", 502)
+        return row
+
+    async def update_ai_application_usage_progress(
+        self,
+        user_id: str,
+        usage_id: str,
+        questions: list[str],
+        answers: list[str],
+    ) -> None:
+        """Guarda el progreso de respuestas sin confirmar todavía el cupo."""
+        self._require_admin_headers()
+        response = await self._client.patch(
+            f"{self._base_url}/rest/v1/usos_ia_postulaciones",
+            headers={**self._admin_headers, "Prefer": "return=representation"},
+            params={
+                "id": f"eq.{usage_id}",
+                "usuario_id": f"eq.{user_id}",
+                "estado": "eq.pending",
+            },
+            json={
+                "preguntas_respuestas": [
+                    {"pregunta": question, "respuesta": answer}
+                    for question, answer in zip(questions, answers)
+                ],
+                "actualizado_en": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if response.is_error:
+            raise AuthServiceError(
+                self._database_error(response, "No fue posible guardar el progreso de respuestas de IA"),
+                502,
+            )
+        if not response.json():
+            raise AuthServiceError("La reserva de IA ya no está disponible", 409)
+
+    async def complete_ai_application_usage(
+        self,
+        user_id: str,
+        usage_id: str,
+        questions: list[str],
+        answers: list[str],
+    ) -> None:
+        """Guarda preguntas y respuestas generadas y confirma el uso del cupo."""
+        self._require_admin_headers()
+        response = await self._client.patch(
+            f"{self._base_url}/rest/v1/usos_ia_postulaciones",
+            headers={**self._admin_headers, "Prefer": "return=representation"},
+            params={
+                "id": f"eq.{usage_id}",
+                "usuario_id": f"eq.{user_id}",
+                "estado": "eq.pending",
+            },
+            json={
+                "preguntas_respuestas": [
+                    {"pregunta": question, "respuesta": answer}
+                    for question, answer in zip(questions, answers)
+                ],
+                "estado": "completed",
+                "actualizado_en": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if response.is_error:
+            raise AuthServiceError(
+                self._database_error(response, "No fue posible guardar las respuestas de IA"),
+                502,
+            )
+        if not response.json():
+            raise AuthServiceError("La reserva de IA ya no está disponible", 409)
+
+    async def fail_ai_application_usage(self, user_id: str, usage_id: str) -> None:
+        """Libera el cupo reservado cuando la generación de respuestas falla."""
+        self._require_admin_headers()
+        response = await self._client.patch(
+            f"{self._base_url}/rest/v1/usos_ia_postulaciones",
+            headers=self._admin_headers,
+            params={
+                "id": f"eq.{usage_id}",
+                "usuario_id": f"eq.{user_id}",
+                "estado": "eq.pending",
+            },
+            json={
+                "estado": "failed",
+                "actualizado_en": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if response.is_error:
+            raise AuthServiceError(
+                self._database_error(response, "No fue posible liberar el cupo diario de IA"),
+                502,
+            )
 
     async def ai_provider_credential(self, user_id: str) -> dict[str, Any] | None:
         rows = await self._rest_get(

@@ -1,5 +1,6 @@
 # `re` se usa para validar formatos que deben cumplir una estructura exacta.
 import re
+from typing import Literal
 
 # `BaseModel` crea esquemas con validación automática y serialización JSON.
 # `EmailStr` valida el formato de email; `Field` define restricciones de campos.
@@ -194,12 +195,6 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: SecretStr = Field(min_length=1)
 
 
-class RefreshTokenRequest(BaseModel):
-    """Token de renovación de una sesión Supabase."""
-
-    refresh_token: SecretStr = Field(min_length=1)
-
-
 class PasswordRecoveryRequest(BaseModel):
     """Correo al que Supabase enviará un enlace de recuperación."""
 
@@ -251,6 +246,7 @@ class AuthResponse(BaseModel):
     last_name: str | None = None
     rut: str | None = None
     telefono: str | None = None
+    subscription_plan: Literal["free", "premium"] = "free"
     requires_email_confirmation: bool = False
 
 
@@ -268,6 +264,7 @@ class CurrentUserResponse(BaseModel):
     last_name: str | None = None
     rut: str | None = None
     telefono: str | None = None
+    subscription_plan: Literal["free", "premium"] = "free"
     email_confirmed_at: str | None = None
 
 

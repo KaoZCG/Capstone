@@ -62,6 +62,43 @@ Todas las operaciones de IA requieren una API key y un modelo activo guardados
 en Supabase. Si falta la configuración o OpenRouter no está disponible, la API
 devuelve un error explícito y no cambia a otro proveedor.
 
+## Planes Free y Premium
+
+El plan de suscripción no reemplaza el rol de acceso (`usuario` o `admin`):
+`plan_suscripcion` solo puede ser `free` o `premium`. Las cuentas nuevas y las
+cuentas existentes quedan en Free por defecto. Free puede generar respuestas
+para cinco vacantes distintas por día, según la hora de Chile; volver a generar
+respuestas para la misma vacante ese día no consume otro cupo. Los intentos que
+fallan liberan la reserva. Premium no tiene ese límite y puede leer y modificar
+el tablero de postulaciones. El backend verifica ambos permisos; ocultar el
+enlace en la interfaz no es el control de acceso.
+
+Ejecuta `migrations/202611230001_free_premium_application_plans.sql` y
+`migrations/202611230002_persist_application_compatibility.sql` en el SQL
+Editor de Supabase antes de desplegar esta versión. Para activar Premium, una
+persona con acceso administrativo a la base de datos puede ejecutar:
+
+```sql
+update public.usuarios
+set plan_suscripcion = 'premium'
+where correo_electronico = 'persona@example.com';
+```
+
+La extensión guarda una postulación en el tablero cuando se envía el formulario
+que fue autocompletado, junto con el porcentaje de compatibilidad que mostró la
+oferta. El tablero conserva el portal, el enlace y las preguntas y respuestas
+generadas para esa vacante; en la tarjeta se muestra un resumen y en el detalle
+se puede revisar el intercambio completo.
+Si el modelo repite una respuesta extensa en preguntas distintas, el backend
+regenera cada campo por separado y devuelve un error explícito si la repetición
+persiste, en vez de completar el formulario con el mismo texto. Si OpenRouter
+informa metadatos de razonamiento para el modelo, el backend limita el esfuerzo
+al mínimo compatible y evita modelos cuyo razonamiento obligatorio no se puede
+limitar. Si aun así el modelo agota los tokens en razonamiento o responde sin
+texto, el backend informa el problema sin reintentar ni guardar respuestas
+incompletas; si OpenRouter responde 429, se informa el tiempo de espera indicado
+por el proveedor cuando está disponible.
+
 ## Extracción de currículums
 
 `POST /api/v1/auth/ia/procesar-cv` envía el texto legible del PDF al modelo

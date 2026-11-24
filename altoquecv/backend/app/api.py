@@ -1,3 +1,4 @@
+import asyncio
 import re
 import io
 import json
@@ -31,6 +32,7 @@ from app.schemas.data import (
     CVExperienceAdaptation,
     GenerarResumenProfesionalRequest,
     IARespuesta,
+    IAUsoDiarioResponse,
     IAAutocompletarRequest,
     OfertaLaborumResponse,
     OfertasLaborumBatchRequest,
@@ -51,6 +53,8 @@ _login_attempt_limiter = LoginAttemptLimiter()
 _MAX_CV_BYTES = 5 * 1024 * 1024
 _AI_PROFILE_CACHE: dict[str, tuple[float, ProfileResponse]] = {}
 _AI_PROFILE_CACHE_TTL_SECONDS = 120.0
+_OPENROUTER_REASONING_METADATA: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_OPENROUTER_REASONING_METADATA_TTL_SECONDS = 3600.0
 
 
 async def _get_ai_profile(user_id: str, service: SupabaseAuthService) -> ProfileResponse:
@@ -82,6 +86,14 @@ def _ai_credentials_encryption_key(settings: Settings) -> str | None:
     if settings.ai_credentials_encryption_key is None:
         return None
     return settings.ai_credentials_encryption_key.get_secret_value()
+
+
+def _require_premium_plan(user: CurrentUserResponse) -> None:
+    if user.subscription_plan != "premium":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El tablero de postulaciones está disponible en el plan Premium.",
+        )
 
 
 async def _selected_ai_provider(
@@ -188,8 +200,8 @@ def _question_guidance(question: str) -> tuple[str, int, int]:
         r"proyecto|arquitectura|tecnolog|desarroll|implement|logro|reto|desafio|responsabilid|cuentanos|describe|trayectoria|constru|migracion|integracion|microservicio|backend|frontend|api|sistema|plataforma|experiencia.{0,45}(laboral|profesional|desarroll|utiliz|proyecto|tecnolog)",
         normalized,
     ):
-        max_words = max(85, min(300, _question_character_limit(question) // 7))
-        max_tokens = max(145, min(460, int(max_words * 1.5)))
+        max_words = max(30, min(100, _question_character_limit(question) // 15))
+        max_tokens = max(120, min(240, max_words * 2))
         return "DETALLADA", max_words, max_tokens
     return "INTERMEDIA", 55, 90
 
@@ -684,6 +696,7 @@ async def clear_profile_curricular_data(
 @router.get("/postulaciones", response_model=list[PostulacionResponse], tags=["Postulaciones"])
 async def postulaciones(authorization: str | None = Header(default=None), service: SupabaseAuthService = Depends(get_auth_service)) -> list[PostulacionResponse]:
     user = await authenticated_user(authorization, service)
+    _require_premium_plan(user)
     try:
         return await service.postulaciones(user.user_id)
     except AuthServiceError as error:
@@ -692,6 +705,7 @@ async def postulaciones(authorization: str | None = Header(default=None), servic
 @router.post("/postulaciones", response_model=PostulacionResponse, status_code=status.HTTP_201_CREATED, tags=["Postulaciones"])
 async def create_postulacion(payload: PostulacionCreateRequest, authorization: str | None = Header(default=None), service: SupabaseAuthService = Depends(get_auth_service)) -> PostulacionResponse:
     user = await authenticated_user(authorization, service)
+    _require_premium_plan(user)
     try:
         return await service.create_postulacion(user.user_id, payload)
     except AuthServiceError as error:
@@ -700,6 +714,7 @@ async def create_postulacion(payload: PostulacionCreateRequest, authorization: s
 @router.patch("/postulaciones/{postulacion_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Postulaciones"])
 async def update_postulacion(postulacion_id: str, payload: PostulacionStatusRequest, authorization: str | None = Header(default=None), service: SupabaseAuthService = Depends(get_auth_service)) -> None:
     user = await authenticated_user(authorization, service)
+    _require_premium_plan(user)
     try:
         await service.update_postulacion_status(user.user_id, postulacion_id, payload.status)
     except AuthServiceError as error:
@@ -708,6 +723,7 @@ async def update_postulacion(postulacion_id: str, payload: PostulacionStatusRequ
 @router.delete("/postulaciones/{postulacion_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Postulaciones"])
 async def delete_postulacion(postulacion_id: str, authorization: str | None = Header(default=None), service: SupabaseAuthService = Depends(get_auth_service)) -> None:
     user = await authenticated_user(authorization, service)
+    _require_premium_plan(user)
     try:
         await service.delete_postulacion(user.user_id, postulacion_id)
     except AuthServiceError as error:
@@ -1950,20 +1966,27 @@ async def _openrouter_free_models(api_key: str) -> list[dict[str, Any]]:
         models = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(models, list):
             raise HTTPException(status_code=502, detail="OpenRouter devolvió un catálogo de modelos inválido.")
-        free_models = [
-            {
-                "id": model["id"],
-                "name": str(model.get("name") or model["id"]),
+        free_models: list[dict[str, Any]] = []
+        cached_at = time.monotonic()
+        for model in models:
+            if not isinstance(model, dict) or not _is_free_openrouter_model(model):
+                continue
+            model_id = model["id"]
+            reasoning_metadata = model.get("reasoning")
+            _OPENROUTER_REASONING_METADATA[model_id] = (
+                cached_at,
+                dict(reasoning_metadata) if isinstance(reasoning_metadata, dict) else None,
+            )
+            free_models.append({
+                "id": model_id,
+                "name": str(model.get("name") or model_id),
                 "context_length": (
                     model["context_length"]
                     if isinstance(model.get("context_length"), int)
                     and not isinstance(model.get("context_length"), bool)
                     else None
                 ),
-            }
-            for model in models
-            if isinstance(model, dict) and _is_free_openrouter_model(model)
-        ]
+            })
         return sorted(free_models, key=lambda model: model["name"].casefold())
     except HTTPException:
         raise
@@ -1972,6 +1995,49 @@ async def _openrouter_free_models(api_key: str) -> list[dict[str, Any]]:
     except httpx.HTTPError as error:
         logger.warning("OpenRouter model catalog request failed: %s", type(error).__name__)
         raise HTTPException(status_code=503, detail="No fue posible conectar con OpenRouter.") from error
+
+
+def _has_fresh_openrouter_reasoning_metadata(model_id: str) -> bool:
+    cached = _OPENROUTER_REASONING_METADATA.get(model_id)
+    if cached is None:
+        return False
+    cached_at, _ = cached
+    if time.monotonic() - cached_at < _OPENROUTER_REASONING_METADATA_TTL_SECONDS:
+        return True
+    _OPENROUTER_REASONING_METADATA.pop(model_id, None)
+    return False
+
+
+def _openrouter_reasoning_parameters(model_id: str) -> dict[str, Any] | None:
+    cached = _OPENROUTER_REASONING_METADATA.get(model_id)
+    if cached is None or time.monotonic() - cached[0] >= _OPENROUTER_REASONING_METADATA_TTL_SECONDS:
+        return None
+    metadata = cached[1]
+    if not metadata:
+        return None
+
+    mandatory = metadata.get("mandatory") is True
+    supported_efforts = metadata.get("supported_efforts")
+    if isinstance(supported_efforts, list):
+        efforts = {effort for effort in supported_efforts if isinstance(effort, str)}
+        if not mandatory and "none" in efforts:
+            return {"effort": "none"}
+        if "minimal" in efforts:
+            return {"effort": "minimal"}
+        if "low" in efforts:
+            return {"effort": "low"}
+
+    if metadata.get("supports_max_tokens") is True:
+        return {"max_tokens": 128}
+    return None
+
+
+def _openrouter_model_requires_uncontrollable_reasoning(model_id: str) -> bool:
+    cached = _OPENROUTER_REASONING_METADATA.get(model_id)
+    if cached is None or time.monotonic() - cached[0] >= _OPENROUTER_REASONING_METADATA_TTL_SECONDS:
+        return False
+    metadata = cached[1]
+    return bool(metadata and metadata.get("mandatory") is True and _openrouter_reasoning_parameters(model_id) is None)
 
 
 async def _verify_openrouter_model(api_key: str, model_id: str) -> None:
@@ -2252,49 +2318,7 @@ async def list_openrouter_free_models(
     except AICredentialEncryptionError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
-            response = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                params={"output_modalities": "text"},
-            )
-        if response.status_code == 401:
-            raise HTTPException(status_code=401, detail="OpenRouter rechazó la API key.")
-        if response.status_code == 429:
-            raise HTTPException(status_code=429, detail="OpenRouter limitó la consulta de modelos. Inténtalo más tarde.")
-        if response.is_error:
-            raise HTTPException(status_code=502, detail="No fue posible consultar los modelos de OpenRouter.")
-
-        try:
-            payload = response.json()
-        except ValueError as error:
-            raise HTTPException(status_code=502, detail="OpenRouter devolvió una respuesta inválida.") from error
-        models = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(models, list):
-            raise HTTPException(status_code=502, detail="OpenRouter devolvió un catálogo de modelos inválido.")
-
-        free_models = [
-            {
-                "id": model["id"],
-                "name": str(model.get("name") or model["id"]),
-                "context_length": (
-                    model["context_length"]
-                    if isinstance(model.get("context_length"), int) and not isinstance(model["context_length"], bool)
-                    else None
-                ),
-            }
-            for model in models
-            if isinstance(model, dict) and _is_free_openrouter_model(model)
-        ]
-        return {"models": sorted(free_models, key=lambda model: model["name"].casefold())}
-    except HTTPException:
-        raise
-    except httpx.TimeoutException as error:
-        raise HTTPException(status_code=504, detail="OpenRouter tardó demasiado al consultar los modelos.") from error
-    except httpx.HTTPError as error:
-        logger.warning("OpenRouter model catalog request failed: %s", type(error).__name__)
-        raise HTTPException(status_code=503, detail="No fue posible conectar con OpenRouter.") from error
+    return {"models": await _openrouter_free_models(api_key)}
 
 
 @router.post("/ia/adaptar-cv", response_model=CVAdaptResponse, tags=["IA"])
@@ -2516,7 +2540,7 @@ async def generar_respuestas_postulacion(
     settings: Settings = Depends(get_settings),
 ) -> IARespuesta:
     user = await authenticated_user(authorization, service)
-    selected_provider, selected_model_id, openrouter_api_key = await _selected_ai_provider(
+    _, selected_model_id, openrouter_api_key = await _selected_ai_provider(
         user.user_id,
         service,
         settings,
@@ -2542,14 +2566,14 @@ async def generar_respuestas_postulacion(
     prepared_answers: list[str | None] = [None] * len(payload.preguntas)
     llm_indices: list[int] = []
     for index, (question, (kind, _, _)) in enumerate(zip(payload.preguntas, question_guidance)):
-        if kind == "INTERMEDIA":
-            llm_indices.append(index)
-        else:
+        if kind == "BREVE":
             prepared_answers[index] = _answer_from_profile(
                 question,
                 profile,
                 f"{payload.cargo_postulacion} {payload.empresa} {payload.descripcion_oferta}",
             )
+        else:
+            llm_indices.append(index)
 
     logger.info(
         "Respuestas basadas directamente en Perfil Maestro: %d; preguntas abiertas para %s: %d",
@@ -2557,8 +2581,46 @@ async def generar_respuestas_postulacion(
         "OpenRouter",
         len(llm_indices),
     )
-    if not llm_indices:
-        return IARespuesta(exito=True, respuestas=[answer or "" for answer in prepared_answers])
+    reasoning_parameters: dict[str, Any] | None = None
+    if llm_indices:
+        if not _has_fresh_openrouter_reasoning_metadata(selected_model_id):
+            await _openrouter_free_models(openrouter_api_key)
+        reasoning_parameters = _openrouter_reasoning_parameters(selected_model_id)
+        if _openrouter_model_requires_uncontrollable_reasoning(selected_model_id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "El modelo seleccionado exige razonamiento que no se puede limitar. "
+                    "Elige otro modelo gratuito."
+                ),
+            )
+
+    try:
+        usage = await service.reserve_ai_application_usage(user.user_id, payload)
+    except AuthServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    if not usage.get("permitido"):
+        if usage.get("en_proceso"):
+            raise HTTPException(
+                status_code=409,
+                detail="Ya se están generando respuestas para esta vacante. Inténtalo nuevamente en unos segundos.",
+            )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Alcanzaste el límite de 5 postulaciones con IA de hoy. "
+                "El cupo se renueva a medianoche, hora de Chile."
+            ),
+        )
+    usage_id = usage.get("uso_id")
+    if not isinstance(usage_id, str):
+        raise HTTPException(status_code=502, detail="No fue posible reservar el uso diario de IA.")
+    daily_usage = IAUsoDiarioResponse(
+        subscription_plan=usage["subscription_plan"],
+        usos_hoy=int(usage.get("usos_hoy") or 0),
+        limite_diario=usage.get("limite_diario"),
+        restantes=usage.get("restantes"),
+    )
 
     def compact(value: object, limit: int = 180) -> str:
         return " ".join(str(value or "").split())[:limit]
@@ -2602,26 +2664,28 @@ async def generar_respuestas_postulacion(
     ) or "Sin formación registrada."
     skills_context = ", ".join(compact(skill, 60) for skill in profile.skills[:30]) or "No informadas"
 
-    question_list = "\n".join(
-        f"{position + 1}. [máximo {question_guidance[index][1]} palabras y "
-        f"{_question_character_limit(payload.preguntas[index])} caracteres] "
-        f"{compact(payload.preguntas[index], 400)}"
-        for position, index in enumerate(llm_indices)
-    )
-
     system_prompt = """
     Eres el asistente de redacción de una plataforma de postulaciones laborales. Redactas respuestas que la persona candidata pueda revisar y usar en un formulario.
-    Responde en español, en primera persona singular, con tono profesional, sencillo, natural y específico. No menciones que eres una IA,
-    el Perfil Maestro ni el currículum. Contesta exactamente lo que pregunta cada campo, sin títulos, listas, saludos ni explicaciones adicionales.
+    Responde en español y en primera persona singular, con un tono profesional, cálido, amable y elegante. Usa frases naturales y sencillas,
+    sin sonar grandilocuente, rígido ni publicitario. No menciones que eres una IA, el Perfil Maestro ni el currículum. Contesta exactamente
+    lo que pregunta cada campo, sin títulos, listas, saludos ni explicaciones adicionales.
+
+    Escribe cada respuesta para su pregunta concreta. No copies ni reutilices el mismo resumen general del perfil en varias respuestas;
+    selecciona solo la experiencia y los datos pertinentes, y enfoca cada respuesta en un aspecto distinto cuando las preguntas se parezcan.
+    Usa mayúsculas de forma normal: al inicio de una oración, en nombres propios y siglas técnicas. No escribas frases ni palabras enteras
+    en mayúsculas para dar énfasis. Conserva los nombres de empresas y productos, usando una capitalización natural si el perfil los trae
+    en mayúsculas sostenidas.
 
     Usa únicamente los datos del perfil entregado como evidencia sobre la persona. La oferta solo sirve para priorizar qué experiencia es relevante;
     sus requisitos nunca prueban que la persona domine una tecnología o haya realizado una tarea. Las habilidades generales acreditan conocimiento declarado,
     pero no demuestran que una tecnología se usó en un empleo o proyecto concreto.
 
-    Para preguntas sobre experiencia, tecnologías, proyectos o logros, responde en 2 a 4 oraciones y prioriza los trabajos y proyectos más recientes que sean pertinentes.
+    Para preguntas sobre experiencia, tecnologías, proyectos o logros, responde en 2 a 4 oraciones concisas y prioriza los trabajos y proyectos más recientes que sean pertinentes.
     Explica con lenguaje claro qué hizo la persona, para quién o en qué proyecto, qué herramientas están vinculadas a esa experiencia y qué resultado
     produjo solo cuando ese resultado esté descrito. Si una tecnología aparece solo en habilidades generales, puedes mencionarla como parte del stack,
     pero aclara naturalmente que no está asociada a un proyecto específico. Evita enumerar el CV, repetir información irrelevante y usar frases vacías como “tengo experiencia”.
+    No des por ciertas las premisas de la pregunta: si pregunta por liderazgo, tamaño de equipo, participación o resultados que no consten en el perfil,
+    no los inventes ni los atribuyas; responde solo lo que esté respaldado.
     Calcula años solo cuando las fechas y la relación de esa tecnología con el trabajo permitan sostener el cálculo; no atribuyas a cada tecnología
     todos los años de experiencia laboral.
 
@@ -2635,7 +2699,7 @@ async def generar_respuestas_postulacion(
     ("..." o "…") ni cortes una oración: cada respuesta debe cerrar con una oración completa y su puntuación normal.
     """
 
-    user_prompt = f"""
+    candidate_context = f"""
     PERFIL DE LA PERSONA CANDIDATA (fuente de evidencia):
     Nombre: {compact(profile.first_name, 80)} {compact(profile.last_name, 80)}
     Habilidades declaradas: {skills_context}
@@ -2648,27 +2712,28 @@ async def generar_respuestas_postulacion(
     Cargo: {compact(payload.cargo_postulacion, 160)}
     Empresa: {compact(payload.empresa, 160)}
     Descripción: {compact(payload.descripcion_oferta, 2500) or "No disponible"}
-
-    Preguntas abiertas, en el orden requerido:
-    {question_list}
-
-    Devuelve una respuesta breve y completa por pregunta, en el mismo orden. No agregues información que no esté respaldada por el perfil.
     """
+
     try:
         timeout = httpx.Timeout(45.0, connect=10.0)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    user_prompt
-                    + "\nDevuelve exclusivamente el objeto JSON solicitado con la propiedad respuestas; "
-                    "no agregues texto fuera del JSON."
-                ),
-            },
-        ]
         async with httpx.AsyncClient(timeout=timeout) as client:
-            if selected_provider == "openrouter":
+
+            async def request_openrouter_json(
+                prompt_content: str,
+                max_tokens: int,
+            ) -> dict[str, Any]:
+                request_body: dict[str, Any] = {
+                    "model": selected_model_id,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt_content},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                }
+                if reasoning_parameters is not None:
+                    request_body["reasoning"] = reasoning_parameters
                 response = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
@@ -2676,61 +2741,200 @@ async def generar_respuestas_postulacion(
                         "HTTP-Referer": str(settings.frontend_url),
                         "X-Title": settings.app_name,
                     },
-                    json={
-                        "model": selected_model_id,
-                        "messages": messages,
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.1,
-                        "max_tokens": min(1800, max(128, sum(question_guidance[index][2] for index in llm_indices) + 80)),
-                    },
+                    json=request_body,
                 )
 
-        if response.is_error:
-            logger.error("OpenRouter respondió HTTP %s al generar respuestas", response.status_code)
-            if selected_provider == "openrouter":
-                if response.status_code == 401:
-                    raise HTTPException(status_code=401, detail="OpenRouter rechazó la API key.")
-                if response.status_code == 429:
-                    raise HTTPException(status_code=429, detail="Se alcanzó el límite gratuito de OpenRouter.")
-                if response.status_code == 402:
-                    raise HTTPException(status_code=402, detail="OpenRouter indicó que el modelo no está disponible sin créditos.")
-                raise HTTPException(status_code=502, detail="OpenRouter no pudo generar las respuestas.")
-            raise HTTPException(status_code=502, detail="OpenRouter no pudo generar las respuestas.")
+                if response.is_error:
+                    logger.error("OpenRouter respondió HTTP %s al generar respuestas", response.status_code)
+                    if response.status_code == 401:
+                        raise HTTPException(status_code=401, detail="OpenRouter rechazó la API key.")
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After", "").strip()
+                        if retry_after.isdigit():
+                            wait_seconds = int(retry_after)
+                            wait_time = (
+                                f"{(wait_seconds + 59) // 60} minuto(s)"
+                                if wait_seconds >= 60
+                                else f"{wait_seconds} segundo(s)"
+                            )
+                            detail = (
+                                f"OpenRouter limitó temporalmente este modelo gratuito. Espera {wait_time} "
+                                "y vuelve a probar, o elige otro modelo gratuito."
+                            )
+                        else:
+                            detail = (
+                                "OpenRouter limitó temporalmente este modelo gratuito. Espera un poco "
+                                "y vuelve a probar, o elige otro modelo gratuito."
+                            )
+                        raise HTTPException(status_code=429, detail=detail)
+                    if response.status_code == 402:
+                        raise HTTPException(status_code=402, detail="OpenRouter indicó que el modelo no está disponible sin créditos.")
+                    raise HTTPException(status_code=502, detail="OpenRouter no pudo generar las respuestas.")
 
-        response_body = response.json()
-        if selected_provider == "openrouter":
-            choices = response_body.get("choices")
-            message = choices[0].get("message", {}) if isinstance(choices, list) and choices else {}
-            raw_answers = message.get("content", "") if isinstance(message, dict) else ""
-        raw_answers = raw_answers.strip() if isinstance(raw_answers, str) else ""
-        if not raw_answers:
-            raise HTTPException(status_code=503, detail="OpenRouter respondió sin texto.")
-        try:
-            answer_data = json.loads(raw_answers)
-        except json.JSONDecodeError as error:
-            logger.warning("OpenRouter devolvió una respuesta que no cumple JSON")
-            raise HTTPException(status_code=503, detail="La IA devolvió un formato inválido. Inténtalo nuevamente.") from error
+                response_body = response.json()
+                choices = response_body.get("choices") if isinstance(response_body, dict) else None
+                choice = choices[0] if isinstance(choices, list) and choices else {}
+                message = choice.get("message", {}) if isinstance(choice, dict) else {}
+                content_value = message.get("content", "") if isinstance(message, dict) else ""
+                finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+                refusal_detected = bool(message.get("refusal")) if isinstance(message, dict) else False
+                if isinstance(content_value, list):
+                    refusal_detected = refusal_detected or any(
+                        isinstance(block, dict) and block.get("type") == "refusal"
+                        for block in content_value
+                    )
+                    raw_content = " ".join(
+                        block["text"] for block in content_value
+                        if isinstance(block, dict) and isinstance(block.get("text"), str)
+                    )
+                else:
+                    raw_content = content_value if isinstance(content_value, str) else ""
+                raw_content = raw_content.strip()
 
-        answers = answer_data.get("respuestas") if isinstance(answer_data, dict) else None
-        if not isinstance(answers, list) or len(answers) != len(llm_indices):
-            count = len(answers) if isinstance(answers, list) else 0
-            logger.warning("OpenRouter devolvió %s respuestas para %s preguntas abiertas", count, len(llm_indices))
-            raise HTTPException(status_code=503, detail="La IA no respondió todas las preguntas. Inténtalo nuevamente.")
+                truncated = finish_reason in {"length", "max_tokens"}
+                if refusal_detected or finish_reason == "content_filter":
+                    logger.warning(
+                        "El modelo de OpenRouter rechazó la generación: finish_reason=%s",
+                        finish_reason,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail="El modelo seleccionado rechazó generar una respuesta. Prueba otro modelo gratuito.",
+                    )
+                if truncated or not raw_content:
+                    usage = response_body.get("usage") if isinstance(response_body, dict) else None
+                    completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+                    completion_details = (
+                        usage.get("completion_tokens_details")
+                        if isinstance(usage, dict)
+                        else None
+                    )
+                    reasoning_tokens = (
+                        completion_details.get("reasoning_tokens")
+                        if isinstance(completion_details, dict)
+                        else None
+                    )
+                    message_keys = (
+                        sorted(key for key in message if key in {"content", "refusal", "reasoning", "tool_calls"})
+                        if isinstance(message, dict)
+                        else []
+                    )
+                    logger.warning(
+                        "OpenRouter terminó sin texto: finish_reason=%s content_type=%s "
+                        "completion_tokens=%s reasoning_tokens=%s message_keys=%s",
+                        finish_reason,
+                        type(content_value).__name__,
+                        completion_tokens,
+                        reasoning_tokens,
+                        message_keys,
+                    )
+                    if truncated:
+                        if reasoning_tokens or (
+                            isinstance(message, dict) and message.get("reasoning")
+                        ):
+                            detail = (
+                                "El modelo agotó el límite de tokens en razonamiento y no generó respuestas. "
+                                "Elige otro modelo gratuito con menor razonamiento."
+                            )
+                        else:
+                            detail = (
+                                "OpenRouter agotó el límite de generación antes de completar la respuesta. "
+                                "Elige otro modelo gratuito."
+                            )
+                        raise HTTPException(
+                            status_code=502,
+                            detail=detail,
+                        )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="El modelo seleccionado terminó sin generar texto. Elige otro modelo gratuito.",
+                    )
 
-        for answer, index in zip(answers, llm_indices):
-            max_words = question_guidance[index][1]
-            prepared_answers[index] = _fit_complete_answer(
-                answer,
-                max_words,
-                _question_character_limit(payload.preguntas[index]),
-            )
-        return IARespuesta(exito=True, respuestas=[answer or "" for answer in prepared_answers])
+                try:
+                    answer_data = json.loads(raw_content)
+                except json.JSONDecodeError as error:
+                    logger.warning("OpenRouter devolvió una respuesta que no cumple JSON")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="La IA devolvió un formato inválido. Inténtalo nuevamente.",
+                    ) from error
+                if not isinstance(answer_data, dict):
+                    raise HTTPException(status_code=503, detail="La IA devolvió un formato inválido. Inténtalo nuevamente.")
+                return answer_data
+
+            for index, question in enumerate(payload.preguntas):
+                if prepared_answers[index] is None:
+                    _, max_words, max_tokens = question_guidance[index]
+                    focused_prompt = f"""
+                    {candidate_context}
+
+                    Pregunta única que debes responder:
+                    [máximo {max_words} palabras y {_question_character_limit(question)} caracteres]
+                    {compact(question, 400)}
+
+                    Contesta solo esta pregunta usando la evidencia pertinente. No hagas un resumen general del perfil,
+                    no menciones experiencias que no aporten a la pregunta y no repitas una respuesta que serviría igual
+                    para cualquier campo. Si la pregunta presupone una responsabilidad, herramienta o resultado que no
+                    aparece en la evidencia, no lo afirmes ni lo inventes.
+                    Devuelve exclusivamente un objeto JSON con la propiedad "respuesta".
+                    """
+                    answer_data = await request_openrouter_json(
+                        focused_prompt,
+                        min(1800, max(128, max_tokens + 80)),
+                    )
+                    answer = answer_data.get("respuesta")
+                    if not isinstance(answer, str) or not answer.strip():
+                        logger.warning("OpenRouter no devolvió una respuesta válida para la pregunta %d", index + 1)
+                        raise HTTPException(
+                            status_code=503,
+                            detail="La IA no generó una respuesta válida para una de las preguntas. Inténtalo nuevamente.",
+                        )
+                    prepared_answers[index] = _fit_complete_answer(
+                        answer,
+                        max_words,
+                        _question_character_limit(question),
+                    )
+
+                progress_answers = [answer or "" for answer in prepared_answers]
+                try:
+                    await service.update_ai_application_usage_progress(
+                        user.user_id,
+                        usage_id,
+                        payload.preguntas,
+                        progress_answers,
+                    )
+                except AuthServiceError as error:
+                    raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+            final_answers = [answer or "" for answer in prepared_answers]
+            try:
+                await service.complete_ai_application_usage(
+                    user.user_id,
+                    usage_id,
+                    payload.preguntas,
+                    final_answers,
+                )
+            except AuthServiceError as error:
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+            return IARespuesta(exito=True, respuestas=final_answers, uso_diario=daily_usage)
     except HTTPException:
+        try:
+            await service.fail_ai_application_usage(user.user_id, usage_id)
+        except AuthServiceError:
+            logger.exception("No se pudo liberar el cupo de IA user_id=%s", user.user_id)
         raise
     except httpx.ConnectError as error:
+        try:
+            await service.fail_ai_application_usage(user.user_id, usage_id)
+        except AuthServiceError:
+            logger.exception("No se pudo liberar el cupo de IA user_id=%s", user.user_id)
         logger.warning("No fue posible conectar con OpenRouter")
         raise HTTPException(status_code=503, detail="No fue posible conectar con OpenRouter.") from error
     except httpx.TimeoutException as error:
+        try:
+            await service.fail_ai_application_usage(user.user_id, usage_id)
+        except AuthServiceError:
+            logger.exception("No se pudo liberar el cupo de IA user_id=%s", user.user_id)
         timeout_seconds = 45.0
         logger.warning("OpenRouter excedió el timeout de %s segundos al generar %s respuestas", timeout_seconds, len(llm_indices))
         raise HTTPException(
@@ -2738,5 +2942,9 @@ async def generar_respuestas_postulacion(
             detail=f"OpenRouter no respondió en {timeout_seconds:g} segundos.",
         ) from error
     except httpx.HTTPError as error:
+        try:
+            await service.fail_ai_application_usage(user.user_id, usage_id)
+        except AuthServiceError:
+            logger.exception("No se pudo liberar el cupo de IA user_id=%s", user.user_id)
         logger.exception("Error HTTP al comunicarse con OpenRouter")
         raise HTTPException(status_code=503, detail="Falló la comunicación con OpenRouter.") from error

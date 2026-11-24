@@ -2,7 +2,7 @@ import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { motion } from 'framer-motion';
-import { MapPin, Calendar } from 'lucide-react';
+import { MapPin, Calendar, ExternalLink } from 'lucide-react';
 import { Postulacion, PostulacionStatus } from '@/types';
 import { PostulacionMenu } from './postulacion-menu';
 
@@ -48,6 +48,10 @@ export function KanbanCard({ postulacion, onDelete, onViewDetails, onMove }: Kan
           <h4 className="text-label-md font-semibold text-on-surface line-clamp-1">{postulacion.empresa.nombre}</h4>
           <p className="text-label-sm text-on-surface-variant line-clamp-1">{postulacion.cargo}</p>
         </div>
+
+        <span className="inline-flex rounded-pill bg-surface-container px-2 py-0.5 text-label-sm capitalize text-on-surface-variant">
+          {postulacion.tipo ?? 'laborum'}
+        </span>
         <div className="shrink-0 ml-2">
           <PostulacionMenu 
             postulacion={postulacion}
@@ -73,7 +77,23 @@ export function KanbanCard({ postulacion, onDelete, onViewDetails, onMove }: Kan
           <Calendar size={12} />
           {new Date(postulacion.fechaPostulacion).toLocaleDateString('es-CL')}
         </div>
+        {postulacion.url_oferta && (
+          <a
+            href={postulacion.url_oferta}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Abrir oferta para ${postulacion.cargo}`}
+            className="inline-flex items-center gap-1 text-label-sm font-medium text-primary hover:underline"
+          >
+            <ExternalLink size={13} /> Oferta
+          </a>
+        )}
       </div>
+      {(postulacion.preguntas_respuestas?.length ?? 0) > 0 && (
+        <p className="mt-2 text-label-sm text-on-surface-variant">
+          {postulacion.preguntas_respuestas?.length} preguntas respondidas con IA
+        </p>
+      )}
     </motion.div>
   );
 }

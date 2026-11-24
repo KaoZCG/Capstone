@@ -18,7 +18,9 @@ export interface Postulacion {
   compatibilidad: number;
   status: PostulacionStatus;
   fechaPostulacion: string;
+  tipo?: 'laborum' | 'trabajando';
   url_oferta?: string;
+  preguntas_respuestas?: { pregunta: string; respuesta: string }[];
   descripcionOferta?: string;
   competenciasCubiertas?: string[];
   proximoPaso?: string;

@@ -8,6 +8,7 @@ export const demoUser: User = {
   rut: '18.234.567-8',
   teléfono: '+56975831234',
   rol: 'usuario',
+  subscription_plan: 'free',
   createdAt: new Date('2024-01-15').toISOString(),
 };
 
@@ -40,6 +41,7 @@ export function createMockUser(data: { nombre: string; rut: string; email: strin
     id: `user-${Date.now()}`,
     ...data,
     rol: 'usuario',
+    subscription_plan: 'free',
     createdAt: new Date().toISOString(),
   };
 }

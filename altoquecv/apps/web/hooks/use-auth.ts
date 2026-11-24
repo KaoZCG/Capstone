@@ -60,6 +60,7 @@ function normalizeUserFromResponse(payload: Record<string, any>, fallbackEmail?:
     rut: payload.rut ?? '',
     teléfono: payload.telefono ?? payload.phone ?? '',
     rol: 'usuario',
+    subscription_plan: payload.subscription_plan === 'premium' ? 'premium' : 'free',
     createdAt: new Date().toISOString(),
   };
 }

@@ -5,6 +5,7 @@ export interface User {
   rut: string;
   teléfono: string;
   rol: 'usuario' | 'admin';
+  subscription_plan: 'free' | 'premium';
   createdAt: string;
 }
 

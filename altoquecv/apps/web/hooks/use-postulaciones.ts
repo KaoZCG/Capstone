@@ -5,7 +5,8 @@ import { useAuth } from './use-auth';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
 export function usePostulaciones() {
-  const { accessToken } = useAuth();
+  const { accessToken, usuario } = useAuth();
+  const isPremium = usuario?.subscription_plan === 'premium';
   const [postulaciones, setPostulaciones] = useState<Postulacion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +24,9 @@ export function usePostulaciones() {
     let cancelled = false;
 
     async function loadPostulaciones() {
-      if (!accessToken) {
+      if (!accessToken || !isPremium) {
         setPostulaciones([]);
+        setError(null);
         setIsLoading(false);
         return;
       }
@@ -53,7 +55,7 @@ export function usePostulaciones() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, isPremium]);
 
   const movePostulacion = async (id: string, nuevoStatus: PostulacionStatus) => {
     if (!accessToken) return;
@@ -78,7 +80,12 @@ export function usePostulaciones() {
     }
   };
 
-  const createPostulacion = async (input: { cargo: string; empresa: string; url_oferta: string }) => {
+  const createPostulacion = async (input: {
+    cargo: string;
+    empresa: string;
+    url_oferta: string;
+    tipo: 'laborum' | 'trabajando';
+  }) => {
     if (!accessToken) throw new Error('Inicia sesión para registrar la postulación.');
     const response = await fetch(`${API_URL}/auth/postulaciones`, {
       method: 'POST',

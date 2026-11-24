@@ -18,7 +18,10 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
-  const { logout } = useAuth();
+  const { logout, usuario } = useAuth();
+  const visibleNavItems = navItems.filter(
+    (item) => item.href !== "/mis-postulaciones" || usuario?.subscription_plan === "premium",
+  );
 
   return (
     <>
@@ -55,7 +58,7 @@ export function Sidebar() {
         </div>
 
         <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = pathname.startsWith(item.href);
             const Icon = item.icon;
             
@@ -78,6 +81,12 @@ export function Sidebar() {
         </nav>
 
         <div className="p-4 border-t border-border space-y-4 shrink-0">
+          <div className="rounded-card border border-border bg-surface-container-low px-3 py-2">
+            <p className="text-label-sm text-on-surface-variant">Plan actual</p>
+            <p className="text-label-md font-semibold text-on-surface">
+              {usuario?.subscription_plan === "premium" ? "Premium" : "Free"}
+            </p>
+          </div>
           <Button 
             variant="ghost" 
             className="w-full justify-start text-error hover:bg-error-container hover:text-on-error-container"

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Search, Filter, Plus } from 'lucide-react';
 import { KanbanBoard } from './components/kanban-board';
 import { Button } from '@/components/ui/Button';
+import { useAuth } from '@/hooks/use-auth';
 import type { PostulacionStatus } from '@/types';
 
 const statusOptions: { value: PostulacionStatus | 'todas'; label: string }[] = [
@@ -20,12 +21,28 @@ export default function MisPostulacionesPage({
   searchParams?: { buscar?: string };
 }) {
   const initialQuery = searchParams?.buscar ?? '';
+  const { usuario } = useAuth();
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [statusFilter, setStatusFilter] = useState<PostulacionStatus | 'todas'>('todas');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   useEffect(() => setSearchQuery(initialQuery), [initialQuery]);
+
+  if (usuario?.subscription_plan !== 'premium') {
+    return (
+      <section className="mx-auto max-w-2xl rounded-container border border-border bg-surface-container-lowest p-8 text-center">
+        <h1 className="text-headline-lg-mobile md:text-headline-lg text-on-surface">Tablero de postulaciones Premium</h1>
+        <p className="mt-3 text-body-md text-on-surface-variant">
+          El plan Free permite generar respuestas de IA para hasta 5 vacantes distintas al día.
+          El tablero Kanban está disponible al activar Premium.
+        </p>
+        <p className="mt-4 text-label-sm text-on-surface-variant">
+          Para consultar la activación de Premium, contacta a la administración de AltoqueCV.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-6rem)]">

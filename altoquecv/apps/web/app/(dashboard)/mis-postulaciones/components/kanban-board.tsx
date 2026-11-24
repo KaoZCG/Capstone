@@ -32,7 +32,12 @@ export function KanbanBoard({
 }) {
   const { postulaciones, isLoading, error, movePostulacion, createPostulacion, deletePostulacion, search } = usePostulaciones();
   const [selectedPostulacion, setSelectedPostulacion] = useState<Postulacion | null>(null);
-  const [newApplication, setNewApplication] = useState({ cargo: '', empresa: '', url_oferta: '' });
+  const [newApplication, setNewApplication] = useState({
+    cargo: '',
+    empresa: '',
+    url_oferta: '',
+    tipo: 'laborum' as 'laborum' | 'trabajando',
+  });
   const [createError, setCreateError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
@@ -65,7 +70,7 @@ export function KanbanBoard({
     setIsCreating(true);
     try {
       await createPostulacion(newApplication);
-      setNewApplication({ cargo: '', empresa: '', url_oferta: '' });
+      setNewApplication({ cargo: '', empresa: '', url_oferta: '', tipo: 'laborum' });
       onCloseCreate?.();
     } catch (submitError) {
       setCreateError(submitError instanceof Error ? submitError.message : 'No fue posible registrar la postulación.');
@@ -123,7 +128,21 @@ export function KanbanBoard({
               <input required maxLength={200} value={newApplication.empresa} onChange={(event) => setNewApplication((current) => ({ ...current, empresa: event.target.value }))} className="mt-1 w-full rounded-input border border-border bg-surface-container-low px-3 py-2 text-body-md text-on-surface placeholder:text-on-surface-variant" />
             </label>
             <label className="block text-label-md text-on-surface">
-              Enlace https de la vacante en Laborum
+              Tipo de portal
+              <select
+                value={newApplication.tipo}
+                onChange={(event) => setNewApplication((current) => ({
+                  ...current,
+                  tipo: event.target.value as 'laborum' | 'trabajando',
+                }))}
+                className="mt-1 w-full rounded-input border border-border bg-surface-container-low px-3 py-2 text-body-md text-on-surface"
+              >
+                <option value="laborum">Laborum</option>
+                <option value="trabajando">Trabajando</option>
+              </select>
+            </label>
+            <label className="block text-label-md text-on-surface">
+              Enlace https de la vacante
               <input required type="url" maxLength={2048} value={newApplication.url_oferta} onChange={(event) => setNewApplication((current) => ({ ...current, url_oferta: event.target.value }))} className="mt-1 w-full rounded-input border border-border bg-surface-container-low px-3 py-2 text-body-md text-on-surface placeholder:text-on-surface-variant" />
             </label>
             {createError && <p role="alert" className="text-body-sm text-error">{createError}</p>}

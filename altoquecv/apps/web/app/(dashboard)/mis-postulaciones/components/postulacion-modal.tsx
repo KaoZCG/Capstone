@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, MapPin, Calendar, CheckCircle2 } from 'lucide-react';
+import { X, MapPin, Calendar, CheckCircle2, ExternalLink } from 'lucide-react';
 import { Postulacion } from '@/types';
 import { Button } from '@/components/ui/Button';
 
@@ -27,6 +27,9 @@ export function PostulacionModal({ postulacion, onClose }: ModalProps) {
               <span>•</span>
               <span className="flex items-center gap-1"><MapPin size={14} /> {postulacion.ubicacion}</span>
             </div>
+            <p className="mt-2 text-label-sm capitalize text-on-surface-variant">
+              Portal: {postulacion.tipo ?? 'laborum'}
+            </p>
           </div>
           <button onClick={onClose} className="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors">
             <X size={20} />
@@ -71,11 +74,35 @@ export function PostulacionModal({ postulacion, onClose }: ModalProps) {
               </p>
             </div>
           )}
+          {postulacion.url_oferta && (
+            <a
+              href={postulacion.url_oferta}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-label-md font-medium text-primary hover:underline"
+            >
+              <ExternalLink size={16} /> Abrir oferta original
+            </a>
+          )}
+          {(postulacion.preguntas_respuestas?.length ?? 0) > 0 && (
+            <section aria-labelledby="application-answers-title">
+              <h4 id="application-answers-title" className="text-label-lg text-on-surface mb-3">
+                Preguntas y respuestas usadas
+              </h4>
+              <div className="space-y-3">
+                {postulacion.preguntas_respuestas?.map((item, index) => (
+                  <article key={`${index}-${item.pregunta}`} className="rounded-input border border-border bg-surface-container-low p-3">
+                    <h5 className="text-label-md font-semibold text-on-surface">{item.pregunta}</h5>
+                    <p className="mt-2 whitespace-pre-wrap text-body-sm text-on-surface-variant">{item.respuesta}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="p-6 border-t border-border bg-surface-container-low flex justify-end gap-3 shrink-0">
           <Button variant="secondary" onClick={onClose}>Cerrar</Button>
-          <Button variant="primary">Actualizar Estado</Button>
         </div>
       </div>
     </div>

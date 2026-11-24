@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, ExternalLink, Sparkles } from 'lucide-react';
 import type { OfertaDetectada, CompatibilidadWidget as ICompatibilidadWidget } from '../types/oferta';
 import { ScoreGauge } from './ScoreGauge';
@@ -34,6 +34,41 @@ export function CompatibilityWidget({
 }: Props) {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const generatedQuestionsAndAnswers = useRef<{ pregunta: string; respuesta: string }[]>([]);
+  const generatedCompatibility = useRef<number | null>(null);
+  const generatedForm = useRef<HTMLFormElement | null>(null);
+
+  useEffect(() => {
+    const handleApplicationSubmit = (event: Event) => {
+      if (
+        !generatedQuestionsAndAnswers.current.length
+        || !(event.target instanceof HTMLFormElement)
+        || event.target !== generatedForm.current
+      ) return;
+      const portal = oferta.portal === 'trabajando' ? 'trabajando' : 'laborum';
+      void chrome.runtime.sendMessage({
+        type: 'ALTOQUE_REGISTRAR_POSTULACION',
+        cargo: oferta.titulo,
+        empresa: oferta.empresa,
+        compatibilidad: generatedCompatibility.current,
+        tipo: portal,
+        url_oferta: oferta.url,
+      }).then((result: { exito?: boolean; detail?: string }) => {
+        if (result?.exito) {
+          setToastMsg('Postulación guardada en tu tablero Premium.');
+          generatedQuestionsAndAnswers.current = [];
+          generatedCompatibility.current = null;
+          generatedForm.current = null;
+        } else {
+          console.info('AltoqueCV: No se pudo guardar la postulación en el tablero.', result?.detail);
+          if (result?.detail) setToastMsg(result.detail);
+        }
+      }).catch((error: unknown) => console.info('AltoqueCV: No se pudo guardar la postulación.', error));
+    };
+
+    document.addEventListener('submit', handleApplicationSubmit);
+    return () => document.removeEventListener('submit', handleApplicationSubmit);
+  }, [oferta]);
 
   const handleAutoFill = async () => {
     setIsLoading(true);
@@ -67,6 +102,8 @@ export function CompatibilityWidget({
         preguntas,
         cargo: oferta.titulo || document.querySelector("h1")?.innerText || "Cargo",
         empresa: oferta.empresa || "Empresa",
+        tipo: oferta.portal === 'trabajando' ? 'trabajando' : 'laborum',
+        url_oferta: oferta.url,
         descripcion_oferta: oferta.descripcion || "",
       });
 
@@ -75,6 +112,7 @@ export function CompatibilityWidget({
       }
 
       let respuestasValidas = 0;
+      const preguntasRespuestas: { pregunta: string; respuesta: string }[] = [];
       camposValidos.forEach((campo, index) => {
         const respuestaIA = data.respuestas[index];
         if (respuestaIA && !respuestaIA.includes("Error")) {
@@ -82,17 +120,24 @@ export function CompatibilityWidget({
           campo.elemento.dispatchEvent(new Event("input", { bubbles: true }));
           campo.elemento.dispatchEvent(new Event("change", { bubbles: true }));
           respuestasValidas += 1;
+          preguntasRespuestas.push({ pregunta: campo.pregunta, respuesta: respuestaIA });
         }
       });
+      generatedQuestionsAndAnswers.current = preguntasRespuestas;
+      generatedCompatibility.current = compatibilidad?.scoreGeneral ?? null;
+      generatedForm.current = camposValidos[0]?.elemento.form ?? null;
 
       onAiResponseStatusChange(respuestasValidas ? "Generada" : "Sin respuestas válidas");
-      setToastMsg(respuestasValidas ? "✨ ¡Postulación autocompletada!" : "La IA no generó respuestas válidas.");
+      const remaining = data.uso_diario?.subscription_plan === 'free'
+        ? ` Te quedan ${data.uso_diario.restantes} de 5 vacantes hoy.`
+        : '';
+      setToastMsg(respuestasValidas ? `✨ ¡Postulación autocompletada!${remaining}` : "La IA no generó respuestas válidas.");
     } catch (error) {
       console.error("Error:", error);
       onAiResponseStatusChange("No disponible");
       setToastMsg(error instanceof Error ? error.message : "Falló la conexión.");
     } finally {
-      setTimeout(() => setToastMsg(null), 4000);
+      setTimeout(() => setToastMsg(null), 8000);
       setIsLoading(false);
     }
   };
@@ -120,13 +165,6 @@ export function CompatibilityWidget({
 
   return (
     <div className="fixed top-4 right-4 z-[9999] w-[320px] max-h-[calc(100vh-2rem)] overflow-y-auto overflow-x-hidden bg-surface rounded-2xl shadow-2xl border border-border font-sans">
-      {/* Notificación Flotante */}
-      {toastMsg && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-on-surface text-surface text-xs font-medium px-4 py-1.5 rounded-full z-10 shadow-lg whitespace-nowrap animate-in fade-in slide-in-from-top-2">
-          {toastMsg}
-        </div>
-      )}
-
       {/* Cabecera Premium */}
       <div className="bg-gradient-to-r from-surface-container-lowest to-surface-container-low p-4 border-b border-border flex justify-between items-center">
         <div className="flex items-center gap-2.5">
@@ -137,6 +175,16 @@ export function CompatibilityWidget({
           <X size={18} />
         </button>
       </div>
+
+      {toastMsg && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mx-3 mt-3 rounded-xl bg-on-surface px-3 py-2.5 text-center text-xs font-medium leading-5 text-surface shadow-lg [overflow-wrap:anywhere]"
+        >
+          {toastMsg}
+        </div>
+      )}
 
       {/* Cuerpo Principal */}
       <div className="p-5 bg-surface-container-lowest">

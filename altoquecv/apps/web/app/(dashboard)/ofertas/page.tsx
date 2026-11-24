@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { BriefcaseBusiness, CheckCircle2, ExternalLink, MapPin, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useOfertasLaborum } from '@/hooks/use-ofertas-laborum';
 import { usePostulaciones } from '@/hooks/use-postulaciones';
+import { useAuth } from '@/hooks/use-auth';
 
 function buildAdaptUrl(oferta: { titulo: string; empresa: string; notas_usuario: string }) {
   const params = new URLSearchParams({
@@ -24,6 +25,8 @@ function fechaCorta(value: string) {
 }
 
 export default function OfertasPage() {
+  const { usuario } = useAuth();
+  const isPremium = usuario?.subscription_plan === 'premium';
   const { ofertas, isLoading, error, recargar, guardarOferta, eliminarOferta } = useOfertasLaborum();
   const { postulaciones, isLoading: cargandoPostulaciones, createPostulacion } = usePostulaciones();
   const [query, setQuery] = useState('');
@@ -83,7 +86,7 @@ export default function OfertasPage() {
     setRegistrandoUrl(oferta.url);
     setMensaje('');
     try {
-      await createPostulacion({ cargo: oferta.titulo, empresa: oferta.empresa, url_oferta: oferta.url });
+      await createPostulacion({ cargo: oferta.titulo, empresa: oferta.empresa, url_oferta: oferta.url, tipo: 'laborum' });
       setMensaje('Postulación registrada en tu Kanban.');
     } catch (error) {
       setMensaje(error instanceof Error ? error.message : 'No se pudo registrar la postulación.');
@@ -209,12 +212,14 @@ export default function OfertasPage() {
                 <div className="flex flex-wrap gap-2">
                   <Link href={buildAdaptUrl(oferta)} className="inline-flex items-center gap-1.5 rounded-button bg-primary px-3 py-2 text-label-sm font-semibold text-on-primary hover:opacity-90"><Sparkles size={15} /> Adaptar CV</Link>
                   <a href={oferta.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-button border border-border px-3 py-2 text-label-sm text-on-surface hover:bg-surface-container-low">Ver oferta <ExternalLink size={15} /></a>
-                  {postulaciones.some((item) => item.url_oferta === oferta.url) ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-button border border-border px-3 py-2 text-label-sm text-on-surface-variant"><CheckCircle2 size={15} /> En Kanban</span>
-                  ) : (
-                    <button type="button" onClick={() => void registrarPostulacion(oferta)} disabled={cargandoPostulaciones || registrandoUrl === oferta.url} title="Solo registra la tarjeta; no envía una postulación a Laborum" className="inline-flex items-center gap-1.5 rounded-button border border-border px-3 py-2 text-label-sm text-on-surface hover:bg-surface-container-low disabled:opacity-50">
-                      {registrandoUrl === oferta.url ? 'Registrando…' : 'Ya postulé · crear tarjeta'}
-                    </button>
+                  {isPremium && (
+                    postulaciones.some((item) => item.url_oferta === oferta.url) ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-button border border-border px-3 py-2 text-label-sm text-on-surface-variant"><CheckCircle2 size={15} /> En Kanban</span>
+                    ) : (
+                      <button type="button" onClick={() => void registrarPostulacion(oferta)} disabled={cargandoPostulaciones || registrandoUrl === oferta.url} title="Solo registra la tarjeta; no envía una postulación a Laborum" className="inline-flex items-center gap-1.5 rounded-button border border-border px-3 py-2 text-label-sm text-on-surface hover:bg-surface-container-low disabled:opacity-50">
+                        {registrandoUrl === oferta.url ? 'Registrando…' : 'Ya postulé · crear tarjeta'}
+                      </button>
+                    )
                   )}
                   <button type="button" onClick={() => void quitarOferta(oferta.id)} disabled={eliminando === oferta.id} aria-label={`Quitar ${oferta.titulo}`} title="Quitar oferta guardada" className="inline-flex items-center justify-center rounded-button border border-border px-3 py-2 text-on-surface-variant hover:bg-error-container/20 hover:text-error disabled:opacity-50"><Trash2 size={16} /></button>
                 </div>

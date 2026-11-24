@@ -23,6 +23,7 @@ import Link from 'next/link';
 
 export default function DashboardPage() {
   const { usuario } = useAuth();
+  const isPremium = usuario?.subscription_plan === 'premium';
   const { postulaciones, isLoading: isLoadingApplications, error: applicationsError } = usePostulaciones();
   const { profile, isLoading: isLoadingProfile, error: profileError } = useProfile();
   const { portales } = usePortales();
@@ -103,8 +104,9 @@ export default function DashboardPage() {
             <Briefcase size={20} />
           </div>
           <span className="text-display-lg text-on-surface">
-          {isLoadingApplications ? '…' : applicationsError ? '—' : postulacionesActivas}
+          {!isPremium ? '—' : isLoadingApplications ? '…' : applicationsError ? '—' : postulacionesActivas}
           </span>
+          {!isPremium && <span className="text-label-sm text-on-surface-variant">Disponible en plan Premium</span>}
         </Card>
 
         <Card className="flex flex-col gap-2">
@@ -114,9 +116,9 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-baseline gap-1">
             <span className="text-display-lg text-success">
-              {isLoadingApplications ? '…' : applicationsError ? '—' : compatibilidadPromedio}
+              {!isPremium ? '—' : isLoadingApplications ? '…' : applicationsError ? '—' : compatibilidadPromedio}
             </span>
-            {!isLoadingApplications && !applicationsError && <span className="text-headline-md text-success">%</span>}
+            {isPremium && !isLoadingApplications && !applicationsError && <span className="text-headline-md text-success">%</span>}
           </div>
         </Card>
 
@@ -127,9 +129,9 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-baseline gap-1">
             <span className="text-display-lg text-on-surface">
-              {isLoadingApplications ? '…' : applicationsError ? '—' : tasaRespuesta}
+              {!isPremium ? '—' : isLoadingApplications ? '…' : applicationsError ? '—' : tasaRespuesta}
             </span>
-            {!isLoadingApplications && !applicationsError && <span className="text-headline-md text-on-surface">%</span>}
+            {isPremium && !isLoadingApplications && !applicationsError && <span className="text-headline-md text-on-surface">%</span>}
           </div>
           <span className="text-label-sm text-on-surface-variant">Postulaciones que avanzaron más allá de “Postulada”</span>
         </Card>
@@ -209,10 +211,12 @@ export default function DashboardPage() {
             <FileText size={18} />
             Revisar CV
           </Link>
-          <Link href="/mis-postulaciones" className="inline-flex items-center justify-center gap-2 rounded-button bg-surface-container-high px-4 py-2 text-label-md text-on-surface transition-colors hover:bg-surface-container-highest">
-            <BarChart size={18} />
-            Ver resultados
-          </Link>
+          {isPremium && (
+            <Link href="/mis-postulaciones" className="inline-flex items-center justify-center gap-2 rounded-button bg-surface-container-high px-4 py-2 text-label-md text-on-surface transition-colors hover:bg-surface-container-highest">
+              <BarChart size={18} />
+              Ver resultados
+            </Link>
+          )}
         </div>
       </section>
     </div>
